@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="KnightTrader Coinbase Setup — $47/mo. Get KnightTrader running on your Coinbase Advanced Trade account with perpetual futures trading." />
+  <title>KnightTrader Coinbase Setup — $47/mo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090c10;
+      --bg-elevated: #11161e;
+      --panel: #11161e;
+      --panel-2: #151c26;
+      --border: rgba(255,255,255,0.07);
+      --border2: rgba(255,255,255,0.12);
+      --text: #e8eef7;
+      --text2: #b0bcc9;
+      --text3: #6a7d93;
+      --green: #3dd68c;
+      --red: #ff7b72;
+      --amber: #ffa657;
+      --blue: #58a6ff;
+      --gold: #f5c542;
+      --coinbase: #0052cc;
+      --gold-glow: rgba(245,197,66,0.15);
+      --coinbase-glow: rgba(0,82,204,0.15);
+      --radius: 10px;
+      --radius-sm: 6px;
+      --transition: 180ms ease;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+    a { color: var(--gold); text-decoration: none; transition: opacity var(--transition); }
+    a:hover { opacity: 0.8; }
+    .container { max-width: 780px; margin: 0 auto; }
+
+    /* Header */
+    header { text-align: center; margin-bottom: 48px; }
+    .tagline {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--coinbase-glow);
+      border: 1px solid rgba(0,82,204,0.3);
+      color: var(--coinbase);
+      padding: 10px 18px;
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 20px;
+    }
+    .tagline .dot {
+      width: 8px; height: 8px; background: var(--coinbase);
+      border-radius: 50%; animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    h1 {
+      font-size: clamp(32px, 5vw, 48px);
+      font-weight: 700;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+      margin-bottom: 16px;
+    }
+    h1 .highlight { color: var(--gold); }
+    .subtitle {
+      font-size: 18px;
+      color: var(--text2);
+      max-width: 600px;
+      margin: 0 auto 8px;
+    }
+    .quote {
+      font-style: italic;
+      color: var(--amber);
+      font-size: 16px;
+      margin-top: 8px;
+    }
+
+    /* Sections */
+    section { margin-bottom: 56px; }
+    h2 {
+      font-size: clamp(22px, 3vw, 28px);
+      font-weight: 700;
+      margin-bottom: 20px;
+      position: relative;
+      padding-left: 16px;
+    }
+    h2::before {
+      content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+      width: 4px; height: 28px; background: linear-gradient(180deg, var(--gold), var(--coinbase));
+      border-radius: 2px;
+    }
+
+    /* Intro */
+    .intro { text-align: center; max-width: 640px; margin: 0 auto; }
+    .intro p { margin-bottom: 14px; }
+    .intro .quote { display: block; margin: 24px auto 0; max-width: 480px; }
+
+    /* The $100 Picture */
+    .money-picture {
+      display: grid;
+      gap: 16px;
+    }
+    .step-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      position: relative;
+    }
+    .step-card::before {
+      content: attr(data-step);
+      position: absolute; top: -12px; left: 20px;
+      background: var(--coinbase); color: #fff;
+      width: 28px; height: 28px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 13px;
+    }
+    .step-card strong { color: var(--gold); }
+    .step-card .coinbase { color: var(--coinbase); font-weight: 600; }
+
+    /* What You Get */
+    .features { display: grid; gap: 16px; }
+    .feature {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      display: flex; gap: 16px;
+      transition: border-color var(--transition), transform var(--transition);
+    }
+    .feature:hover { border-color: var(--border2); transform: translateY(-2px); }
+    .feature-num {
+      flex-shrink: 0;
+      width: 40px; height: 40px; border-radius: 10px;
+      background: linear-gradient(135deg, var(--coinbase), #0073e6);
+      color: #fff; display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 16px;
+    }
+    .feature h3 { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+    .feature p { color: var(--text2); font-size: 14px; line-height: 1.7; }
+
+    /* CTA */
+    .cta {
+      text-align: center;
+      padding: 40px 24px;
+      background: linear-gradient(135deg, rgba(0,82,204,0.15), rgba(245,197,66,0.1));
+      border: 1px solid rgba(0,82,204,0.2);
+      border-radius: var(--radius);
+    }
+    .cta h2 { padding-left: 0; margin-bottom: 12px; }
+    .cta h2::before { display: none; }
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 10px;
+      background: linear-gradient(135deg, var(--coinbase), #003d99);
+      color: #fff; font-weight: 600; font-size: 16px;
+      padding: 16px 32px; border-radius: 999px;
+      border: none; cursor: pointer;
+      transition: transform var(--transition), box-shadow var(--transition);
+      text-decoration: none;
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,82,204,0.35); }
+    .secure { font-size: 13px; color: var(--text3); margin-top: 12px; }
+
+    /* Disclaimer */
+    .disclaimer {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      font-size: 13px;
+      color: var(--text3);
+      line-height: 1.7;
+    }
+    .disclaimer strong { color: var(--text); }
+
+    /* Footer Links */
+    .footer-links {
+      text-align: center; margin-top: 40px; padding-top: 24px;
+      border-top: 1px solid var(--border);
+    }
+    .footer-links a { margin: 0 12px; font-size: 14px; color: var(--text2); }
+    .footer-links a:hover { color: var(--gold); }
+
+    /* Responsive */
+    @media (max-width: 560px) {
+      body { padding: 24px 16px; }
+      .feature { flex-direction: column; gap: 10px; }
+      .feature-num { width: 32px; height: 32px; font-size: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="tagline"><span class="dot"></span> Coinbase Perpetual Futures</div>
+      <h1>KnightTrader Coinbase Setup — <span class="highlight">$47/mo</span></h1>
+      <p class="subtitle">Get KnightTrader running on your Coinbase Advanced Trade account with perpetual futures trading.</p>
+      <p class="quote">"I fucked this up so you don't have to."</p>
+    </header>
+
+    <!-- Intro -->
+    <section>
+      <h2>Straight Talk</h2>
+      <div class="intro">
+        <p><strong>I want this to be fair.</strong></p>
+        <p>You get a working setup. I get a subscription + Coinbase referral cream. You keep the account, the profits, and the keys.</p>
+        <p class="quote">"My piece is the subscription + referral cream … Your piece is the account."</p>
+      </div>
+    </section>
+
+    <!-- Why $47 -->
+    <section>
+      <h2>Why $47/month is the deal I'm comfortable with</h2>
+      <div style="max-width: 680px; margin: 0 auto;">
+        <p><strong>My piece:</strong> the subscription + Coinbase referral cream (a tiny slice of volume).</p>
+        <p><strong>Your piece:</strong> the account, the equity curve, and full control.</p>
+        <p>Even just parking the first ~$50 left after you pay for the guide has averaged <strong>more than $50 a month</strong> in my testing. The sub covers itself from gains when they're there; you grow the account when they're bigger.</p>
+        <p>Want more upside? Add real money later. My referral cream still pales next to your equity curve.</p>
+      </div>
+    </section>
+
+    <!-- The $100 Picture -->
+    <section>
+      <h2>The $100 Picture</h2>
+      <div class="money-picture">
+        <div class="step-card" data-step="1">
+          <p>Start with about <strong>$100</strong>.</p>
+        </div>
+        <div class="step-card" data-step="2">
+          <p><strong>$47/month</strong> unlocks the KnightTrader tutorial (covers my cut).</p>
+        </div>
+        <div class="step-card" data-step="3">
+          <p>Put about <strong>$50</strong> into <span class="coinbase">USDT/USDC on Coinbase</span> (card / Apple Pay / Google Pay / bank). The guide walks the funding step-by-step.</p>
+        </div>
+        <div class="step-card" data-step="4">
+          <p>Let KnightTrader run. Cover the sub from gains when they're there; grow the account when they're bigger.</p>
+        </div>
+        <div class="step-card" data-step="5">
+          <p>Want more upside? Add real money later. My referral cream still pales next to your equity curve.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- What You Get -->
+    <section>
+      <h2>What You Actually Get</h2>
+      <div class="features">
+        <div class="feature">
+          <div class="feature-num">01</div>
+          <div>
+            <h3>The mistakes already paid for</h3>
+            <p>Geo-blocks, dead API keys, timestamp drift, WAF blocks — documented with exact fixes. No VPN needed for Coinbase.</p>
+          </div>
+        </div>
+        <div class="feature">
+          <div class="feature-num">02</div>
+          <div>
+            <h3>Coinbase → Exchange funding</h3>
+            <p>Buy USDT/USDC where cards work, transfer to Advanced Trade, move to perpetual futures portfolio. Step-by-step.</p>
+          </div>
+        </div>
+        <div class="feature">
+          <div class="feature-num">03</div>
+          <div>
+            <h3>API keys done right</h3>
+            <p>Create Coinbase Advanced Trade API key with View + Trade permissions. Base64 secret, passphrase you set. Stored locally for KnightTrader.</p>
+          </div>
+        </div>
+        <div class="feature">
+          <div class="feature-num">04</div>
+          <div>
+            <h3>KnightTrader on Windows</h3>
+            <p>Copy-paste install, sandboxed Hermes dashboard, cron cron, free Nous models, personalized 1-minute prompt with your compendium path.</p>
+          </div>
+        </div>
+        <div class="feature">
+          <div class="feature-num">05</div>
+          <div>
+            <h3>KnightTrader takes trades</h3>
+            <p>USDT in perpetual futures portfolio, cron looping every minute → watch activity on Coinbase Advanced Trade → Chats tab logs every tick.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section>
+      <div class="cta">
+        <h2>Get in — $47/mo</h2>
+        <p style="margin-bottom: 20px; color: var(--text2);">Pay → unlock tutorial → buy USDT/USDC on Coinbase → transfer to Advanced Trade → run KnightTrader.</p>
+        <a href="https://buy.stripe.com/your-link" class="btn-primary" target="_blank">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Secure checkout via Stripe
+        </a>
+        <p class="secure">Cancel anytime from Stripe receipt / Customer Portal. Success redirects to beginner tutorial HTML.</p>
+      </div>
+    </section>
+
+    <!-- Disclaimer -->
+    <section>
+      <div class="disclaimer">
+        <strong>Disclaimer:</strong> Trading can lose money — including every dollar of a small ~$50 balance. Past / personal average results are not a guarantee. Only use cash you can afford to lose. This is a setup guide, not financial advice. Coinbase Advanced Trade perpetual futures trading is available to eligible customers in supported regions. Follow Coinbase's Terms and your local laws.
+      </div>
+    </section>
+
+    <!-- Footer Links -->
+    <footer class="footer-links">
+      <a href="./hermes-setup-coinbase-buy.html">Coinbase Setup</a>
+      <a href="./hermes-setup-buy.html">Blofin Setup</a>
+      <a href="./index.html">All Guides</a>
+    </footer>
+  </div>
+</body>
+</html>
