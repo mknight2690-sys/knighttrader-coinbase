@@ -133,29 +133,20 @@
 
   <script>
     (function() {
+      var PAYMENT_LINK = 'https://buy.stripe.com/aFacN67Iy6K8fll4W0e3e0a';
       var buyButton = document.getElementById('buyButton');
       var ctaButton = document.getElementById('ctaButton');
       var ctaPreview = document.getElementById('ctaPreview');
 
-      function stripeCheckout(lineItems, successUrl, cancelUrl) {
-        var payload = JSON.stringify({ lineItems: lineItems, successUrl: successUrl, cancelUrl: cancelUrl });
-        return fetch('/create-checkout-session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
-          .then(function(response) { return response.json(); })
-          .then(function(data) {
-            if (data && data.url) { window.location.href = data.url; }
-            else { throw new Error(data && data.error ? data.error : 'Checkout failed'); }
-          });
-      }
-
-      function buyTotal() {
-        return stripeCheckout([{ price: 'price_total_guide', quantity: 1 }], window.location.origin + window.location.pathname + '?success', window.location.origin + window.location.pathname + '?cancel');
+      function goToCheckout() {
+        window.location.href = PAYMENT_LINK;
       }
 
       if (buyButton) {
-        buyButton.addEventListener('click', function(event) { event.preventDefault(); buyTotal().catch(function(err) { alert('Checkout could not start: ' + err.message); }); });
+        buyButton.addEventListener('click', function(event) { event.preventDefault(); goToCheckout(); });
       }
       if (ctaButton) {
-        ctaButton.addEventListener('click', function(event) { event.preventDefault(); buyTotal().catch(function(err) { alert('Checkout could not start: ' + err.message); }); });
+        ctaButton.addEventListener('click', function(event) { event.preventDefault(); goToCheckout(); });
       }
       if (ctaPreview) {
         ctaPreview.addEventListener('click', function(event) {
@@ -166,13 +157,9 @@
 
       var url = new URL(window.location.href);
       var success = url.searchParams.get('success');
-      var cancel = url.searchParams.get('cancel');
 
       if (success) {
         document.querySelector('.wrap').insertAdjacentHTML('beforeend', '<div class="guarantee" style="margin-top:22px;"><h4>Purchase received.</h4><p>Your receipt is on its way. The tutorial link is below; if anything went wrong and you did not get it, contact me and I will send it again.</p><pre style="position:relative;"><code>https://mknight2690-sys.github.io/Polly-Poly-Bot/hermes-coinbase-setup.html</code><button class="copybtn" data-copy="https://mknight2690-sys.github.io/Polly-Poly-Bot/hermes-coinbase-setup.html">Copy</button></pre></div>');
-      }
-      if (cancel) {
-        document.querySelector('.wrap').insertAdjacentHTML('beforeend', '<div class="panel" style="margin-top:22px;"><h3>Checkout cancelled.</h3><p>No worries. You can try again when you are ready, or preview the tutorial first.</p><pre style="position:relative;"><code>https://mknight2690-sys.github.io/Polly-Poly-Bot/hermes-coinbase-setup.html</code><button class="copybtn" data-copy="https://mknight2690-sys.github.io/Polly-Poly-Bot/hermes-coinbase-setup.html">Copy</button></pre></div>');
       }
 
       function copyText(text, btn) {
