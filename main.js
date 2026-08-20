@@ -67,7 +67,7 @@ const FALLBACK_PAID_NOUS_MODELS = [
   { id: 'minimax/minimax-m2.5', label: 'minimax/minimax-m2.5' },
 ];
 
-  const DEFAULTS = {
+const DEFAULTS = {
   coinbase: { apiKey: '', secretKey: '', passphrase: '' },
   nous: { apiKey: '', model: DEFAULT_NOUS_MODEL },
   settings: { notifySounds: true },
@@ -130,7 +130,7 @@ function loadStoredData() {
       const data = decryptData(raw);
       if (data && typeof data === 'object') return migrateStoreData(data);
     }
-  } catch {}
+        } catch {}
   return JSON.parse(JSON.stringify(DEFAULTS));
 }
 function saveStore(data) {
