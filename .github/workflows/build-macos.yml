@@ -16,7 +16,7 @@ jobs:
             artifact_name: KnightTrader_Coinbase
             asset_name: KnightTrader.Coinbase.dmg
           - os: windows-latest
-            artifact_name: KnightTrader Coinbase Setup
+            artifact_name: KnightTrader_Coinbase
             asset_name: Knightrader.Coinbase.exe
 
     runs-on: ${{ matrix.os }}
@@ -34,7 +34,7 @@ jobs:
         run: npm install
 
       - name: Build for current platform
-        run: npm run build
+        run: npm run package
 
       - name: Upload Windows artifact
         if: matrix.os == 'windows-latest'

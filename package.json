@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "build": "electron-builder --win --mac",
+    "package": "electron-builder --win --mac"
   },
   "build": {
     "appId": "com.knighttrader.coinbase",
