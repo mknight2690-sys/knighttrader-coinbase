@@ -15,9 +15,11 @@ jobs:
           - os: macos-latest
             artifact_name: KnightTrader_Coinbase
             asset_name: KnightTrader.Coinbase.dmg
+            build_target: --mac
           - os: windows-latest
             artifact_name: KnightTrader_Coinbase
             asset_name: Knightrader.Coinbase.exe
+            build_target: --win
 
     runs-on: ${{ matrix.os }}
 
@@ -34,7 +36,7 @@ jobs:
         run: npm install
 
       - name: Build for current platform
-        run: npm run package
+        run: npm run package -- ${{ matrix.build_target }}
 
       - name: Upload Windows artifact
         if: matrix.os == 'windows-latest'

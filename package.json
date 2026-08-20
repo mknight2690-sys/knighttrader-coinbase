@@ -23,12 +23,6 @@
       "target": "dmg",
       "icon": "assets/icon.icns",
       "category": "public.app-category.finance"
-    },
-    "publish": {
-      "provider": "github",
-      "owner": "mknight2690-sys",
-      "repo": "knighttrader-coinbase",
-      "releaseType": "release"
     }
   },
   "dependencies": {
