@@ -11,7 +11,6 @@
   "build": {
     "appId": "com.knighttrader.coinbase",
     "productName": "KnightTrader Coinbase",
-    "publish": "never",
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"
