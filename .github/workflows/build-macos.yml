@@ -8,6 +8,8 @@ on:
 jobs:
   build-macos:
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,19 +25,21 @@ jobs:
         run: npm install
 
       - name: Build macOS app
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: npm run package -- --mac --publish never
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: KnightTrader_Coinbase
-          path: dist/KnightTrader_Coinbase*.dmg
+          path: dist/*.dmg
 
       - name: Create GitHub Release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/KnightTrader_Coinbase*.dmg
-          generate_release_notes: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          gh release create "$TAG" --repo "${{ github.repository }}" --title "$TAG" --generate-notes
+          gh release upload "$TAG" dist/*.dmg --repo "${{ github.repository }}"
