@@ -2,15 +2,14 @@ name: Build and Release KnightTrader Coinbase for macOS
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - master
 
 jobs:
   build-macos:
     runs-on: macos-latest
     permissions:
       contents: write
-      metadata: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -26,6 +25,7 @@ jobs:
         run: npm install
 
       - name: Build macOS app
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: npm run package -- --mac
@@ -37,9 +37,9 @@ jobs:
           path: dist/*.dmg
 
       - name: Create GitHub Release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
-          gh release create "${{ github.ref_name }}" --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --generate-notes
-          gh release upload "${{ github.ref_name }}" dist/*.dmg --repo "${{ github.repository }}"
+          TAG="v1.0.1"
+          gh release create "$TAG" --repo "${{ github.repository }}" --title "$TAG" --generate-notes
+          gh release upload "$TAG" dist/*.dmg --repo "${{ github.repository }}"

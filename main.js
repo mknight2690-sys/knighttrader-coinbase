@@ -1675,6 +1675,35 @@ async function configureCron() {
     return { ok: false, msg: e.message, prompt: buildCronPrompt() };
   }
 
+  async function refreshCronToken(prevToken) {
+    try {
+      const fresh = await fetchDashboardSessionToken(true);
+      appendLog('🔧 configureCron: refreshed dashboard session token', 'info');
+      if (fresh && fresh !== prevToken) {
+        const probe = await hermesApiRequest('GET', '/api/config', null, fresh);
+        if (probe.status === 401 && fresh !== prevToken) {
+          appendLog('⚠ configureCron: refreshed token still unauthorized, retrying once more…', 'warn');
+          const again = await fetchDashboardSessionToken(true);
+          appendLog('🔧 configureCron: reacquired dashboard session token', 'info');
+          return again || fresh;
+        }
+        return fresh;
+      }
+      return fresh;
+    } catch (e) {
+      appendLog(`⚠ configureCron: token refresh failed: ${e.message}`, 'warn');
+      return prevToken;
+    }
+  }
+
+  if (token) {
+    const probe = await hermesApiRequest('GET', '/api/config', null, token);
+    if (probe.status === 401) {
+      appendLog('⚠ configureCron: initial cron token unauthorized, refreshing…', 'warn');
+      token = await refreshCronToken(token);
+    }
+  }
+
   const sync = await syncHermesCredentials(token, { restartGateway: true });
   if (!sync.ok) {
     appendLog(`⚠ configureCron: credential sync failed: ${sync.msg || sync.error || 'unknown'}`, 'warn');
@@ -1702,19 +1731,34 @@ async function configureCron() {
 
   try {
     appendLog('🔧 configureCron: listing existing cron jobs…', 'info');
-    const list = await hermesApiRequest('GET', '/api/cron/jobs?profile=default', null, token);
+    let list = await hermesApiRequest('GET', '/api/cron/jobs?profile=default', null, token);
     appendLog(`🔧 configureCron: list status=${list.status}`, 'info');
+    if (list.status === 401) {
+      token = await refreshCronToken(token);
+      list = await hermesApiRequest('GET', '/api/cron/jobs?profile=default', null, token);
+      appendLog(`🔧 configureCron: list retry status=${list.status}`, 'info');
+    }
     if (list.status === 200 && Array.isArray(list.body)) {
       const existing = list.body.find((job) => job.name === jobSpec.name);
       if (existing?.id) {
         appendLog(`🔧 configureCron: updating existing job ${existing.id}`, 'info');
-        const updated = await hermesApiRequest(
+        let updated = await hermesApiRequest(
           'PUT',
           `/api/cron/jobs/${encodeURIComponent(existing.id)}?profile=default`,
           { updates: jobSpec },
           token,
         );
         appendLog(`🔧 configureCron: update status=${updated.status}`, 'info');
+        if (updated.status === 401) {
+          token = await refreshCronToken(token);
+          updated = await hermesApiRequest(
+            'PUT',
+            `/api/cron/jobs/${encodeURIComponent(existing.id)}?profile=default`,
+            { updates: jobSpec },
+            token,
+          );
+          appendLog(`🔧 configureCron: update retry status=${updated.status}`, 'info');
+        }
         if (updated.status < 300) {
           appendLog('✅ Cron job updated: coinbase-perp-trading (every 5m)', 'success');
           triggerAndConfirmCron(token, existing.id);
@@ -1733,8 +1777,13 @@ async function configureCron() {
 
   try {
     appendLog('🔧 configureCron: creating cron job via POST /api/cron/jobs', 'info');
-    const created = await hermesApiRequest('POST', '/api/cron/jobs?profile=default', jobSpec, token);
+    let created = await hermesApiRequest('POST', '/api/cron/jobs?profile=default', jobSpec, token);
     appendLog(`🔧 configureCron: create status=${created.status}`, 'info');
+    if (created.status === 401) {
+      token = await refreshCronToken(token);
+      created = await hermesApiRequest('POST', '/api/cron/jobs?profile=default', jobSpec, token);
+      appendLog(`🔧 configureCron: create retry status=${created.status}`, 'info');
+    }
     if (created.status < 300) {
       appendLog('✅ Cron configured: coinbase-perp-trading (every 5m)', 'success');
       triggerAndConfirmCron(token, created.body?.id);
