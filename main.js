@@ -1083,6 +1083,30 @@ async function updateCronModelOnly(model) {
 let freeModelSelectPromise = null;
 let lastModelPingAt = 0;
 
+function modelCandidateIndex(candidates, modelId) {
+  const mdl = normalizeNousModel(modelId);
+  const idx = candidates.findIndex((c) => normalizeNousModel(c.id) === mdl);
+  return idx >= 0 ? idx : candidates.length;
+}
+
+async function pingModelCandidate(candidate, { quiet = false } = {}) {
+  const mdl = normalizeNousModel(candidate.id);
+  const inf = resolveInferenceForModel(mdl);
+  const pingTimeout = inf.pingTimeoutMs || (inf.provider === 'nvidia' ? 90000 : 25000);
+  if (!quiet) {
+    appendLog(
+      `  → ping ${mdl} (${inf.provider}${candidate.benchmark ? ` · bench ${candidate.benchmark}` : ''})…`,
+      'info',
+    );
+  }
+  const res = await pingInferenceModel(candidate.apiKey, mdl, pingTimeout);
+  if (!res.ok && !quiet) {
+    const errLabel = res.rateLimited ? `${res.error} (rate limit)` : (res.error || 'no pong');
+    appendLog(`  ✗ ${mdl}: ${errLabel}`, 'warn');
+  }
+  return { ...res, model: mdl, candidate };
+}
+
 async function applyModelSwitch(mdl, { reply, reason } = {}) {
   const previous = normalizeNousModel(storeData.nous?.model || DEFAULT_NOUS_MODEL);
   const changed = mdl !== previous;
@@ -1119,33 +1143,59 @@ async function autoSelectWorkingFreeModelOnce({ quiet = false } = {}) {
   }
 
   const current = normalizeNousModel(storeData.nous?.model || DEFAULT_NOUS_MODEL);
+  const currentIdx = modelCandidateIndex(candidates, current);
+  const bestModel = normalizeNousModel(candidates[0].id);
+  const onFallback = currentIdx > 0;
+
   if (!quiet) {
     appendLog(
-      `🔎 Auto-ping ${candidates.length} models (NVIDIA benchmark order, then Nous free)…`,
+      onFallback
+        ? `🔎 Auto-ping: retrying ${bestModel} first (fallback active on ${current})…`
+        : `🔎 Auto-ping ${candidates.length} models (NVIDIA benchmark order, then Nous free)…`,
       'info',
     );
+  } else if (onFallback) {
+    appendLog(`🔎 Minute ping: retrying ${bestModel} (current fallback: ${current})`, 'info');
   }
 
-  for (const candidate of candidates) {
-    const mdl = normalizeNousModel(candidate.id);
-    const inf = resolveInferenceForModel(mdl);
-    const pingTimeout = inf.provider === 'nvidia' ? 90000 : 25000;
-    if (!quiet) {
-      appendLog(
-        `  → ping ${mdl} (${inf.provider}${candidate.benchmark ? ` · bench ${candidate.benchmark}` : ''})…`,
-        'info',
-      );
-    }
-    const res = await pingInferenceModel(candidate.apiKey, mdl, pingTimeout);
+  // 1) Always probe higher-ranked models first so we upgrade as soon as rate limits clear.
+  for (let i = 0; i < currentIdx; i += 1) {
+    const res = await pingModelCandidate(candidates[i], { quiet });
     if (res.ok) {
-      if (!quiet) {
-        appendLog(`✅ Model pong: ${mdl} — "${String(res.reply).slice(0, 40)}"`, 'success');
+      if (!quiet || onFallback) {
+        appendLog(`✅ Best model back: ${res.model} — "${String(res.reply).slice(0, 40)}"`, 'success');
       }
       lastModelPingAt = Date.now();
-      return applyModelSwitch(mdl, { reply: res.reply, reason: 'ping-ok' });
+      return applyModelSwitch(res.model, { reply: res.reply, reason: 'upgrade-after-fallback' });
     }
-    const errLabel = res.rateLimited ? `${res.error} (rate limit)` : (res.error || 'no pong');
-    if (!quiet) appendLog(`  ✗ ${mdl}: ${errLabel}`, 'warn');
+  }
+
+  // 2) Keep the current model if it still responds — avoid downgrading on a transient top-model rate limit.
+  if (currentIdx < candidates.length) {
+    const res = await pingModelCandidate(candidates[currentIdx], { quiet });
+    if (res.ok) {
+      if (onFallback) {
+        appendLog(
+          `ℹ Keeping ${current} — ${bestModel} still unavailable; will retry next minute`,
+          'info',
+        );
+      } else if (!quiet) {
+        appendLog(`✅ Current model OK: ${current}`, 'success');
+      }
+      lastModelPingAt = Date.now();
+      sendToRenderer('kt-free-model-selected', { model: current, reply: res.reply, changed: false, held: true });
+      return { ok: true, model: current, reply: res.reply, changed: false, held: true };
+    }
+  }
+
+  // 3) Current model failed — fail over to the next working lower-ranked model.
+  for (let i = currentIdx + 1; i < candidates.length; i += 1) {
+    const res = await pingModelCandidate(candidates[i], { quiet });
+    if (res.ok) {
+      appendLog(`✅ Failover model: ${res.model} — "${String(res.reply).slice(0, 40)}"`, 'success');
+      lastModelPingAt = Date.now();
+      return applyModelSwitch(res.model, { reply: res.reply, reason: 'failover' });
+    }
   }
 
   if (!quiet) {
@@ -1153,6 +1203,8 @@ async function autoSelectWorkingFreeModelOnce({ quiet = false } = {}) {
       `⚠ No model responded (current: ${current}). Cron may fail until next minute ping.`,
       'warn',
     );
+  } else {
+    appendLog(`⚠ Minute ping: no model responded (current: ${current})`, 'warn');
   }
   sendToRenderer('kt-free-model-selected', { model: current, changed: false, failed: true });
   lastModelPingAt = Date.now();
