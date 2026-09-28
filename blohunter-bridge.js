@@ -864,6 +864,37 @@ class BlohunterBridge {
     }
   }
 
+  markProprSectionsAvailable(data) {
+    if (!data || typeof data !== 'object') return;
+    if (!data.sectionStatus || typeof data.sectionStatus !== 'object') {
+      data.sectionStatus = {};
+    }
+    data.sectionStatus.openPositionsUnavailable = false;
+    data.sectionStatus.recentClosedUnavailable = false;
+    data.sectionStatus.closedTrades48hUnavailable = false;
+    data.openPositionsUnavailable = false;
+    data.recentClosedUnavailable = false;
+    data.closedTrades48hUnavailable = false;
+  }
+
+  overlayLiveProprPositions(data, live) {
+    const mappedOpen = live.mappedOpenPositions || mapProprOpenPositions(live.openPositions || []);
+    const mappedClosed = live.mappedClosedPositions || mapProprClosedPositions(live.closedPositions || []);
+    data.openPositions = mappedOpen;
+    data.recentClosed = mappedClosed;
+    data.closedTrades48h = mappedClosed.filter(
+      (row) => row.closedAt && row.closedAt >= Date.now() - 48 * 60 * 60 * 1000,
+    );
+    if (!data.exposure || typeof data.exposure !== 'object') data.exposure = {};
+    data.exposure.openCount = live.openCount ?? mappedOpen.length;
+    data.exposure.totalMargin = live.totalMargin ?? 0;
+    data.exposure.totalUnrealized = live.totalUnrealized ?? 0;
+    this.markProprSectionsAvailable(data);
+    if (data.errorMessage && /open positions|closed/i.test(String(data.errorMessage))) {
+      data.errorMessage = '';
+    }
+  }
+
   startLiveAccountPoll() {
     if (this.livePollTimer) return;
     const tick = () => {
@@ -955,6 +986,11 @@ class BlohunterBridge {
               blofinApiFresh: true,
               blofinMonitoringSuspended: false,
             },
+            sectionStatus: {
+              openPositionsUnavailable: false,
+              recentClosedUnavailable: false,
+              closedTrades48hUnavailable: false,
+            },
           },
         };
       }
@@ -965,32 +1001,10 @@ class BlohunterBridge {
     if (!data.balances || typeof data.balances !== 'object') data.balances = {};
 
     const deskEquity = Number(data.balances.totalEquity);
-    const deskHasPositions = Array.isArray(data.openPositions) && data.openPositions.length > 0;
-    const deskHasClosed = Array.isArray(data.recentClosed) && data.recentClosed.length > 0;
 
     if (live?.ok) {
       this.applyLiveProprSnapshot(data, live);
-      const mappedOpen = live.mappedOpenPositions || mapProprOpenPositions(live.openPositions || []);
-      const mappedClosed = live.mappedClosedPositions || mapProprClosedPositions(live.closedPositions || []);
-      if (mappedOpen.length > 0 || !deskHasPositions) {
-        data.openPositions = mappedOpen;
-        data.openPositionsUnavailable = false;
-        if (data.errorMessage && /open positions/i.test(String(data.errorMessage))) {
-          data.errorMessage = '';
-        }
-      }
-      if (mappedClosed.length > 0 || !deskHasClosed) {
-        data.recentClosed = mappedClosed;
-        data.closedTrades48h = mappedClosed.filter(
-          (row) => row.closedAt && row.closedAt >= Date.now() - 48 * 60 * 60 * 1000,
-        );
-      }
-      if (!data.exposure || typeof data.exposure !== 'object') data.exposure = {};
-      if (live.openCount > 0 || !deskHasPositions) {
-        data.exposure.openCount = live.openCount;
-        data.exposure.totalMargin = live.totalMargin;
-        data.exposure.totalUnrealized = live.totalUnrealized;
-      }
+      this.overlayLiveProprPositions(data, live);
     }
 
     const accountRows = Array.isArray(data.balances.account) ? data.balances.account : [];
@@ -1028,8 +1042,12 @@ class BlohunterBridge {
       Number.isFinite(equity)
     ) {
       data.errorMessage = '';
-      data.openPositionsUnavailable = false;
+      this.markProprSectionsAvailable(data);
       if (!Array.isArray(data.openPositions)) data.openPositions = [];
+    }
+
+    if (live?.ok) {
+      this.markProprSectionsAvailable(data);
     }
 
     if (Array.isArray(data.openPositions)) {

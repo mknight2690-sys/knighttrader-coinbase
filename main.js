@@ -178,10 +178,10 @@ function resolveInferenceForModel(modelId) {
   };
 }
 
-function resolveApiKeyForModel(modelId, nousKeyOverride = '') {
+function resolveApiKeyForModel(modelId, nousKeyOverride = '', nvidiaKeyOverride = '') {
   const inf = resolveInferenceForModel(modelId);
   if (inf.provider === 'nvidia') {
-    return { ...inf, apiKey: String(storeData.nvidia?.apiKey || '').trim() };
+    return { ...inf, apiKey: String(nvidiaKeyOverride || storeData.nvidia?.apiKey || '').trim() };
   }
   return { ...inf, apiKey: String(nousKeyOverride || storeData.nous?.apiKey || '').trim() };
 }
@@ -399,12 +399,21 @@ function getNousCredentialDefaultPath() {
 }
 
 async function pickCredentialFile(kind) {
-  const defaultPath = kind === 'propr'
-    ? path.join(os.homedir(), 'OneDrive', 'Documents', 'Propr API Key.txt')
-    : getNousCredentialDefaultPath();
+  let defaultPath = getNousCredentialDefaultPath();
+  if (kind === 'propr') {
+    defaultPath = path.join(os.homedir(), 'OneDrive', 'Documents', 'Propr API Key.txt');
+  } else if (kind === 'nvidia') {
+    defaultPath = path.join(os.homedir(), 'OneDrive', 'Documents', 'Nvidia API Key.txt');
+  }
+
+  const titles = {
+    propr: 'Select Propr API key file',
+    nvidia: 'Select NVIDIA API key file',
+    nous: 'Select Nous Portal credentials file',
+  };
 
   const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
-    title: kind === 'propr' ? 'Select Propr API key file' : 'Select Nous Portal credentials file',
+    title: titles[kind] || titles.nous,
     defaultPath: fs.existsSync(defaultPath) ? defaultPath : path.dirname(defaultPath),
     properties: ['openFile'],
     filters: [
@@ -431,6 +440,19 @@ async function pickCredentialFile(kind) {
       return { ok: true, path: filePath, nous };
     }
 
+    if (kind === 'nvidia') {
+      let apiKey = parsed.nvidia.apiKey || '';
+      if (!apiKey) {
+        const raw = fs.readFileSync(filePath, 'utf8').trim();
+        if (/^nvapi-/i.test(raw)) apiKey = raw;
+      }
+      if (!apiKey) {
+        return { ok: false, error: 'NVIDIA API key (nvapi-…) not found in that file.', path: filePath };
+      }
+      appendLog(`📂 Loaded NVIDIA API key from ${filePath}`, 'success');
+      return { ok: true, path: filePath, nvidia: { apiKey } };
+    }
+
     const propr = {
       apiKey: parsed.propr.apiKey || '',
       accountId: parsed.propr.accountId || '',
@@ -445,7 +467,7 @@ async function pickCredentialFile(kind) {
   }
 }
 
-function saveCredentials({ propr, nous }) {
+function saveCredentials({ propr, nous, nvidia }) {
   if (propr) {
     storeData.propr = {
       apiKey: String(propr.apiKey || storeData.propr.apiKey || '').trim(),
@@ -456,6 +478,11 @@ function saveCredentials({ propr, nous }) {
     storeData.nous = {
       apiKey: String(nous.apiKey || storeData.nous.apiKey || '').trim(),
       model: normalizeNousModel(nous.model || storeData.nous.model || DEFAULT_NOUS_MODEL),
+    };
+  }
+  if (nvidia) {
+    storeData.nvidia = {
+      apiKey: String(nvidia.apiKey || storeData.nvidia?.apiKey || '').trim(),
     };
   }
   saveStore(storeData);
@@ -817,10 +844,10 @@ async function testProprCredentials(credentials) {
   return result;
 }
 
-async function testNousCredentials(apiKey, model) {
+async function testNousCredentials(apiKey, model, nvidiaApiKey = '') {
   const mdl = normalizeNousModel(model);
   if (!mdl) return { ok: false, error: 'Select a model first.' };
-  const resolved = resolveApiKeyForModel(mdl, apiKey);
+  const resolved = resolveApiKeyForModel(mdl, apiKey, nvidiaApiKey);
   if (!resolved.apiKey) {
     return {
       ok: false,
@@ -2436,8 +2463,12 @@ ipcMain.handle('announce-voice', (_e, text) => {
   appendLog(`🔊 Voice: ${msg}`, 'info');
 });
 ipcMain.handle('pick-nous-credential-file', async () => pickCredentialFile('nous'));
+ipcMain.handle('pick-nvidia-credential-file', async () => pickCredentialFile('nvidia'));
 
-ipcMain.handle('get-credentials', () => storeData);
+ipcMain.handle('get-credentials', () => {
+  bootstrapNvidiaKeyFromDocuments();
+  return storeData;
+});
 ipcMain.handle('save-credentials', async (_e, data) => {
   try { storeData = migrateStoreData({ ...storeData, ...data }); saveStore(storeData); } catch {}
   try {
@@ -2466,7 +2497,7 @@ ipcMain.handle('write-compendium', async () => {
 });
 ipcMain.handle('get-app-version', () => app.getVersion());
 ipcMain.handle('get-nous-models', () => fetchNousModelCatalog());
-ipcMain.handle('test-nous-credentials', (_e, { apiKey, model }) => testNousCredentials(apiKey, model));
+ipcMain.handle('test-nous-credentials', (_e, { apiKey, model, nvidiaApiKey }) => testNousCredentials(apiKey, model, nvidiaApiKey));
 ipcMain.handle('auto-select-free-model', async () => autoSelectWorkingFreeModel());
 ipcMain.handle('check-hermes', async () => checkHermesInstalled());
 ipcMain.handle('install-hermes', async () => installHermes());

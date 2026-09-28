@@ -32,7 +32,9 @@
       let next = String(node.nodeValue || '').replace(/BloHunter(?:\s+Connect)?/gi, BRAND);
       next = next
         .replace(/Live extension log/gi, 'Hermes cron log')
-        .replace(/Recent Activity/gi, 'Hermes Activity');
+        .replace(/Recent Activity/gi, 'Hermes Activity')
+        .replace(/No open BloFin positions right now\./gi, 'No open Propr positions right now.')
+        .replace(/BloFin/gi, 'Propr');
       if (next !== node.nodeValue) node.nodeValue = next;
       return;
     }
