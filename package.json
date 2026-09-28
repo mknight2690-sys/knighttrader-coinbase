@@ -1,6 +1,6 @@
 {
   "name": "knight-trader-propr",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "KnightTrader Propr — Hermes credential manager & launcher",
   "main": "main.js",
   "scripts": {
@@ -15,7 +15,7 @@
     "productName": "KnightTrader Propr",
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.jpg"
     },
     "nsis": {
       "oneClick": false,
@@ -23,7 +23,7 @@
     },
     "mac": {
       "target": "dmg",
-      "icon": "assets/icon.png",
+      "icon": "assets/icon.jpg",
       "category": "public.app-category.finance"
     },
     "publish": {
