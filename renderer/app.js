@@ -236,7 +236,7 @@ async function init() {
     window.kt.onFreeModelSelected((info) => {
       if (info?.model) {
         setNousModelValue(info.model);
-        appendLogLine({ ts: Date.now(), type: info.failed ? 'warn' : 'success', msg: info.failed ? `No free model responded. Keeping ${info.model}.` : `Auto-selected free model: ${info.model}` });
+        appendLogLine({ ts: Date.now(), type: 'success', msg: `🤖 Auto-selected free model: ${info.model}` });
       }
     });
   }

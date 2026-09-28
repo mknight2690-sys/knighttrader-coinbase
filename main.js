@@ -523,11 +523,17 @@ function httpsRequest(url, options = {}) {
   return new Promise((resolve, reject) => {
     const parsedUrl = new URL(url);
     const data = options.body ? Buffer.from(options.body) : null;
+    const timeout = Number(options.timeout) > 0 ? Number(options.timeout) : 0;
+    const headers = { ...(options.headers || {}) };
+    if (data && !headers['Content-Length'] && !headers['content-length']) {
+      headers['Content-Length'] = Buffer.byteLength(data);
+    }
     const req = https.request({
       hostname: parsedUrl.hostname,
       path: parsedUrl.pathname + parsedUrl.search,
       method: options.method || 'GET',
-      headers: options.headers || {},
+      headers,
+      timeout: timeout || undefined,
     }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
@@ -537,6 +543,12 @@ function httpsRequest(url, options = {}) {
       });
     });
 
+    if (timeout) {
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timed out after 45 seconds.'));
+      });
+    }
     req.on('error', reject);
     if (data) req.write(data);
     req.end();
@@ -710,36 +722,74 @@ async function fetchLiveCoinbaseAccount(options = {}) {
   }
 }
 
-async function testNousCredentials({ apiKey, model }) {
+function testNousCredentials(apiKey, model) {
   const key = String(apiKey || '').trim();
-  const modelId = normalizeNousModel(model);
-  if (!key) return { ok: false, error: 'API key is required.' };
-  try {
-    const { status, raw } = await httpsRequest(NOUS_INFERENCE_URL, {
+  const mdl = normalizeNousModel(model);
+  if (!key) return Promise.resolve({ ok: false, error: 'Portal API key is required.' });
+  if (!mdl) return Promise.resolve({ ok: false, error: 'Select a Nous model first.' });
+
+  const body = JSON.stringify({
+    model: mdl,
+    messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
+    max_tokens: 16,
+    temperature: 0,
+  });
+
+  appendLog(`🧪 Testing Nous credentials (${mdl})…`, 'info');
+
+  return new Promise((resolve) => {
+    const req = https.request(NOUS_INFERENCE_URL, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${key}`,
         'Content-Type': 'application/json',
+        Authorization: `Bearer ${key}`,
+        'Content-Length': Buffer.byteLength(body),
+        'User-Agent': '6SystemTradingApp/1.0',
       },
-      body: JSON.stringify({
-        model: modelId,
-        messages: [{ role: 'user', content: 'Reply with the word OK.' }],
-        max_tokens: 16,
-      }),
+      timeout: 45000,
+    }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => {
+        let parsed;
+        try { parsed = JSON.parse(raw); } catch { parsed = null; }
+
+        if (res.statusCode >= 200 && res.statusCode < 300 && parsed) {
+          const reply = parsed?.choices?.[0]?.message?.content?.trim()
+            || parsed?.choices?.[0]?.text?.trim()
+            || '';
+          appendLog(`✅ Nous test passed (${mdl})${reply ? `: ${reply.slice(0, 80)}` : ''}`, 'success');
+          resolve({
+            ok: true,
+            model: mdl,
+            reply: reply || '(empty reply — key works)',
+            status: res.statusCode,
+          });
+          return;
+        }
+
+        const errMsg = parsed?.error?.message
+          || parsed?.message
+          || (typeof parsed?.error === 'string' ? parsed.error : null)
+          || raw.slice(0, 200)
+          || `HTTP ${res.statusCode}`;
+        appendLog(`✗ Nous test failed (${res.statusCode}): ${errMsg}`, 'error');
+        resolve({ ok: false, error: errMsg, status: res.statusCode, model: mdl });
+      });
     });
-    let parsed;
-    try { parsed = JSON.parse(raw); } catch { parsed = null; }
-    if (status === 401 || status === 403) {
-      return { ok: false, error: parsed?.error?.message || 'Unauthorized' };
-    }
-    if (!String(status || '').startsWith('2')) {
-      return { ok: false, error: parsed?.error?.message || parsed?.message || `HTTP ${status}` };
-    }
-    const reply = String(parsed?.choices?.[0]?.message?.content || '').trim();
-    return { ok: true, model: modelId, reply: reply.slice(0, 80) };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
+
+    req.on('timeout', () => {
+      req.destroy();
+      appendLog('✗ Nous test timed out after 45s', 'error');
+      resolve({ ok: false, error: 'Request timed out after 45 seconds.' });
+    });
+    req.on('error', (e) => {
+      appendLog(`✗ Nous test error: ${e.message}`, 'error');
+      resolve({ ok: false, error: e.message });
+    });
+    req.write(body);
+    req.end();
+  });
 }
 
 function catalogModelEntry(modelName, free) {
@@ -890,6 +940,7 @@ async function updateCronModelOnly(model) {
 }
 
 let freeModelSelectPromise = null;
+let lastFreeModelPick = null;
 
 async function autoSelectWorkingFreeModelOnce() {
   const apiKey = String(storeData.nous?.apiKey || '').trim();
@@ -922,6 +973,9 @@ async function autoSelectWorkingFreeModelOnce() {
       const changed = mdl !== current;
       storeData.nous = { ...(storeData.nous || {}), model: mdl };
       saveStore(storeData);
+      try { syncHermesConfig(); } catch (e) {
+        appendLog(`ℹ Hermes model sync skipped: ${e.message}`, 'info');
+      }
       try {
         await updateCronModelOnly(mdl);
       } catch (e) {
@@ -939,10 +993,16 @@ async function autoSelectWorkingFreeModelOnce() {
 }
 
 function autoSelectWorkingFreeModel() {
+  if (lastFreeModelPick?.ok) return Promise.resolve(lastFreeModelPick);
   if (freeModelSelectPromise) return freeModelSelectPromise;
-  freeModelSelectPromise = autoSelectWorkingFreeModelOnce().finally(() => {
-    freeModelSelectPromise = null;
-  });
+  freeModelSelectPromise = autoSelectWorkingFreeModelOnce()
+    .then((result) => {
+      lastFreeModelPick = result;
+      return result;
+    })
+    .finally(() => {
+      freeModelSelectPromise = null;
+    });
   return freeModelSelectPromise;
 }
 
@@ -2324,7 +2384,8 @@ ipcMain.handle('write-compendium', async () => {
   }
 });
 ipcMain.handle('get-nous-models', () => fetchNousModelCatalog());
-ipcMain.handle('test-nous-credentials', async (_e, { apiKey, model }) => testNousCredentials({ apiKey, model }));
+ipcMain.handle('test-nous-credentials', (_e, { apiKey, model }) => testNousCredentials(apiKey, model));
+ipcMain.handle('auto-select-free-model', async () => autoSelectWorkingFreeModel());
 ipcMain.handle('check-hermes', async () => checkHermesInstalled());
 ipcMain.handle('install-hermes', async () => installHermes());
 ipcMain.handle('wipe-hermes', async () => wipeHermesInstall());
@@ -2608,7 +2669,8 @@ async function autoconnectHermes() {
     const cron = await configureCron();
     if (cron?.ok) appendLog('Coinbase cron configured on launch.', 'success');
     else appendLog(`Cron autoconfig: ${cron?.msg || 'needs setup'}`, 'warn');
-    await autoSelectWorkingFreeModel();
+    const picked = await autoSelectWorkingFreeModel();
+    if (picked?.model) await updateCronModelOnly(picked.model);
   } catch (e) {
     appendLog(`Hermes autoconnect: ${e.message}`, 'warn');
   }
