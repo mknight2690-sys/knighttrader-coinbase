@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('kt', {
 
   // Utilities
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 
   // Updates
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),

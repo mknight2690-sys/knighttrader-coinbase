@@ -118,6 +118,8 @@ const el = {
 
   // Settings
   aboutHermesVer: $('about-hermes-ver'),
+  sidebarVersion: $('sidebar-version'),
+  aboutAppVersion: $('about-app-version'),
 
   // Trading
   tradingWebview: $('trading-webview'),
@@ -162,6 +164,15 @@ async function populateNousModels() {
 }
 
 async function init() {
+  try {
+    const appVersion = await window.kt.getAppVersion();
+    const normalized = appVersion ? String(appVersion).replace(/^v/, '') : '';
+    if (normalized) {
+      if (el.sidebarVersion) el.sidebarVersion.textContent = `v${normalized}`;
+      if (el.aboutAppVersion) el.aboutAppVersion.textContent = `KnightTrader v${normalized}`;
+    }
+  } catch (_) {}
+
   await populateNousModels();
   // Load creds
   try {

@@ -2383,6 +2383,7 @@ ipcMain.handle('write-compendium', async () => {
     return { ok: false, error: e.message };
   }
 });
+ipcMain.handle('get-app-version', () => app.getVersion());
 ipcMain.handle('get-nous-models', () => fetchNousModelCatalog());
 ipcMain.handle('test-nous-credentials', (_e, { apiKey, model }) => testNousCredentials(apiKey, model));
 ipcMain.handle('auto-select-free-model', async () => autoSelectWorkingFreeModel());
