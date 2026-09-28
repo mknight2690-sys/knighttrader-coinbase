@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('kt', {
   onDashboardReady: (cb) => ipcRenderer.on('dashboard-ready', (_e, d) => cb(d)),
   onDashboardStopped: (cb) => ipcRenderer.on('dashboard-stopped', (_e, d) => cb(d)),
   onUpdateStatus: (cb) => ipcRenderer.on('update-status', (_e, payload) => cb(payload)),
+  onFreeModelSelected: (cb) => ipcRenderer.on('kt-free-model-selected', (_e, info) => cb(info)),
 
   // Utilities
   openExternal: (url) => ipcRenderer.invoke('open-external', url),

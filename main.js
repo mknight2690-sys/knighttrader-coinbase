@@ -51,6 +51,7 @@ const DEFAULT_NOUS_MODEL = 'tencent/hy3:free';
 const FALLBACK_FREE_NOUS_MODELS = [
   { id: 'tencent/hy3:free', label: 'tencent/hy3:free (free)' },
   { id: 'upstage/solar-pro4:free', label: 'upstage/solar-pro4:free (free)' },
+  { id: 'meituan/longcat-2.0:free', label: 'meituan/longcat-2.0:free (free)' },
   { id: 'stepfun/step-3.7-flash:free', label: 'stepfun/step-3.7-flash:free (free)' },
   { id: 'poolside/laguna-s-2.1:free', label: 'poolside/laguna-s-2.1:free (free)' },
   { id: 'poolside/laguna-xs-2.1:free', label: 'poolside/laguna-xs-2.1:free (free)' },
@@ -73,7 +74,18 @@ const DEFAULTS = {
   settings: { notifySounds: true },
 };
 
-const LEGACY_NOUS_MODELS = {};
+const LEGACY_NOUS_MODELS = {
+  'hunyuan-turbos-latest': 'tencent/hy3:free',
+  'hunyuan-lite': 'tencent/hy3:free',
+  'hunyuan-standard': 'tencent/hy3',
+  'tencent/hy free': 'tencent/hy3:free',
+  'openrouter/elephant-alpha': 'tencent/hy3:free',
+  'poolside/laguna-m.1:free': 'poolside/laguna-s-2.1:free',
+  'nvidia/nemotron-3-super-120b-a12b:free': 'upstage/solar-pro4:free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free': 'meituan/longcat-2.0:free',
+  'inclusionai/ring-2.6-1t:free': 'stepfun/step-3.7-flash:free',
+  'deepseek/deepseek-v4-flash-free': 'tencent/hy3:free',
+};
 
 function normalizeNousModel(value) {
   const v = String(value || '').trim();
@@ -375,8 +387,7 @@ function getCoinbaseBaseUrl() {
 
 function normalizeNousModel(value) {
   const v = String(value || '').trim();
-  if (!v) return DEFAULT_NOUS_MODEL;
-  return v;
+  return LEGACY_NOUS_MODELS[v] || v || DEFAULT_NOUS_MODEL;
 }
 
 function appendLog(message, level = 'info') {
@@ -729,6 +740,210 @@ async function testNousCredentials({ apiKey, model }) {
   } catch (e) {
     return { ok: false, error: e.message };
   }
+}
+
+function catalogModelEntry(modelName, free) {
+  const id = String(modelName || '').trim();
+  if (!id) return null;
+  return { id, label: free ? `${id} (free)` : id, free: !!free };
+}
+
+function preferDefaultFreeModels(free) {
+  const list = Array.isArray(free) ? free.filter((m) => m?.id) : [];
+  const def = list.find((m) => m.id === DEFAULT_NOUS_MODEL);
+  const rest = list.filter((m) => m.id !== DEFAULT_NOUS_MODEL);
+  if (def) return [def, ...rest];
+  return [{ id: DEFAULT_NOUS_MODEL, label: `${DEFAULT_NOUS_MODEL} (free)`, free: true }, ...rest];
+}
+
+async function fetchNousModelCatalog() {
+  try {
+    const res = await httpsRequest(NOUS_RECOMMENDED_MODELS_URL, { timeout: 15000 });
+    const parsed = JSON.parse(res.raw);
+    const free = preferDefaultFreeModels(
+      (parsed.freeRecommendedModels || [])
+        .map((m) => catalogModelEntry(m.modelName, true))
+        .filter(Boolean),
+    );
+    const paidSeen = new Set(free.map((m) => m.id));
+    const paid = (parsed.paidRecommendedModels || [])
+      .map((m) => catalogModelEntry(m.modelName, false))
+      .filter((m) => m && !String(m.id).endsWith(':free') && !paidSeen.has(m.id));
+    if (free.length) {
+      return {
+        ok: true,
+        defaultModel: DEFAULT_NOUS_MODEL,
+        free,
+        paid: paid.length ? paid : FALLBACK_PAID_NOUS_MODELS,
+        source: 'live',
+      };
+    }
+  } catch (e) {
+    appendLog(`⚠ Nous model catalog: ${e.message} — using fallback list`, 'warn');
+  }
+  return {
+    ok: true,
+    defaultModel: DEFAULT_NOUS_MODEL,
+    free: FALLBACK_FREE_NOUS_MODELS,
+    paid: FALLBACK_PAID_NOUS_MODELS,
+    source: 'fallback',
+  };
+}
+
+function pingNousModel(apiKey, model, timeoutMs = 25000) {
+  const key = String(apiKey || '').trim();
+  const mdl = normalizeNousModel(model);
+  if (!key) return Promise.resolve({ ok: false, error: 'no-api-key' });
+  if (!mdl) return Promise.resolve({ ok: false, error: 'no-model' });
+
+  const body = JSON.stringify({
+    model: mdl,
+    messages: [{ role: 'user', content: 'Reply with exactly: PONG' }],
+    max_tokens: 8,
+    temperature: 0,
+  });
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (result) => { if (!settled) { settled = true; resolve(result); } };
+    const req = https.request(NOUS_INFERENCE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${key}`,
+        'Content-Length': Buffer.byteLength(body),
+        'User-Agent': 'KnightTrader-Coinbase/1.0',
+      },
+      timeout: timeoutMs,
+    }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          let parsed = null;
+          try { parsed = JSON.parse(raw); } catch { parsed = null; }
+          const reply = parsed?.choices?.[0]?.message?.content?.trim()
+            || parsed?.choices?.[0]?.text?.trim()
+            || '';
+          if (reply) done({ ok: true, model: mdl, reply });
+          else done({ ok: false, error: 'empty-reply', model: mdl });
+        } else {
+          done({ ok: false, error: `http-${res.statusCode}`, model: mdl });
+        }
+      });
+    });
+    req.on('timeout', () => { req.destroy(); done({ ok: false, error: 'timeout', model: mdl }); });
+    req.on('error', (e) => done({ ok: false, error: e.message, model: mdl }));
+    req.write(body);
+    req.end();
+  });
+}
+
+function sendToRenderer(channel, payload) {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+  } catch {}
+}
+
+async function updateCronModelOnly(model) {
+  const mdl = normalizeNousModel(model);
+  if (!mdl) return { ok: false, msg: 'No model' };
+  if (!(await probeDashboardPort())) return { ok: false, msg: 'Dashboard not running' };
+  let token;
+  try {
+    token = await fetchDashboardSessionToken();
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  }
+  const list = await hermesApiRequest('GET', '/api/cron/jobs?profile=default', null, token);
+  if (list.status !== 200 || !Array.isArray(list.body)) {
+    return { ok: false, msg: `list failed (${list.status})` };
+  }
+  const existing = list.body.find((job) => job.name === 'coinbase-perp-trading');
+  if (!existing?.id) {
+    appendLog('ℹ Cron job not found yet — model will be used when cron is configured.', 'info');
+    return { ok: false, msg: 'no-existing-job' };
+  }
+  const existingPrompt = existing.prompt || existing.spec?.prompt || null;
+  const updates = {
+    name: 'coinbase-perp-trading',
+    provider: 'custom',
+    base_url: NOUS_INFERENCE_BASE,
+    model: mdl,
+  };
+  if (existingPrompt) updates.prompt = existingPrompt;
+  const updated = await hermesApiRequest(
+    'PUT',
+    `/api/cron/jobs/${encodeURIComponent(existing.id)}?profile=default`,
+    { updates },
+    token,
+  );
+  if (updated.status < 300) {
+    appendLog(`✅ Cron model updated to ${mdl} (prompt preserved)`, 'success');
+    return { ok: true, jobId: existing.id, model: mdl };
+  }
+  const detail = typeof updated.body === 'object'
+    ? (updated.body.detail || JSON.stringify(updated.body))
+    : String(updated.body);
+  appendLog(`⚠ Cron model update failed (${updated.status}): ${detail}`, 'warn');
+  return { ok: false, msg: detail };
+}
+
+let freeModelSelectPromise = null;
+
+async function autoSelectWorkingFreeModelOnce() {
+  const apiKey = String(storeData.nous?.apiKey || '').trim();
+  if (!apiKey) {
+    appendLog('ℹ Skipping free-model auto-ping: no Nous API key saved.', 'info');
+    return { ok: false, reason: 'no-api-key' };
+  }
+  const catalog = await fetchNousModelCatalog();
+  const candidates = Array.isArray(catalog?.free) && catalog.free.length
+    ? catalog.free
+    : FALLBACK_FREE_NOUS_MODELS;
+  if (!candidates.length) {
+    appendLog('ℹ Skipping free-model auto-ping: no free models available.', 'info');
+    return { ok: false, reason: 'no-free-models' };
+  }
+
+  appendLog(`🔎 Auto-pinging ${candidates.length} free models to find a working one…`, 'info');
+  const current = normalizeNousModel(storeData.nous?.model || DEFAULT_NOUS_MODEL);
+  const ordered = [
+    ...candidates.filter((m) => normalizeNousModel(m.id) === current),
+    ...candidates.filter((m) => normalizeNousModel(m.id) !== current),
+  ];
+
+  for (const candidate of ordered) {
+    const mdl = normalizeNousModel(candidate.id);
+    appendLog(`  → ping ${mdl}…`, 'info');
+    const res = await pingNousModel(apiKey, mdl, 25000);
+    if (res.ok) {
+      appendLog(`✅ Working free model found: ${mdl} — "${String(res.reply).slice(0, 40)}"`, 'success');
+      const changed = mdl !== current;
+      storeData.nous = { ...(storeData.nous || {}), model: mdl };
+      saveStore(storeData);
+      try {
+        await updateCronModelOnly(mdl);
+      } catch (e) {
+        appendLog(`ℹ Cron model forward skipped: ${e.message}`, 'info');
+      }
+      sendToRenderer('kt-free-model-selected', { model: mdl, reply: res.reply, changed });
+      return { ok: true, model: mdl, reply: res.reply, changed };
+    }
+    appendLog(`  ✗ ${mdl}: ${res.error || 'no pong'}`, 'warn');
+  }
+
+  appendLog('⚠ No free model responded. Keeping current selection; cron may produce incomplete ticks.', 'warn');
+  sendToRenderer('kt-free-model-selected', { model: current, changed: false, failed: true });
+  return { ok: false, reason: 'all-failed', model: current };
+}
+
+function autoSelectWorkingFreeModel() {
+  if (freeModelSelectPromise) return freeModelSelectPromise;
+  freeModelSelectPromise = autoSelectWorkingFreeModelOnce().finally(() => {
+    freeModelSelectPromise = null;
+  });
+  return freeModelSelectPromise;
 }
 
 // ── Hermes helpers ─────────────────────────────────────────────────────────
@@ -2108,7 +2323,7 @@ ipcMain.handle('write-compendium', async () => {
     return { ok: false, error: e.message };
   }
 });
-ipcMain.handle('get-nous-models', async () => FALLBACK_FREE_NOUS_MODELS);
+ipcMain.handle('get-nous-models', () => fetchNousModelCatalog());
 ipcMain.handle('test-nous-credentials', async (_e, { apiKey, model }) => testNousCredentials({ apiKey, model }));
 ipcMain.handle('check-hermes', async () => checkHermesInstalled());
 ipcMain.handle('install-hermes', async () => installHermes());
@@ -2393,6 +2608,7 @@ async function autoconnectHermes() {
     const cron = await configureCron();
     if (cron?.ok) appendLog('Coinbase cron configured on launch.', 'success');
     else appendLog(`Cron autoconfig: ${cron?.msg || 'needs setup'}`, 'warn');
+    await autoSelectWorkingFreeModel();
   } catch (e) {
     appendLog(`Hermes autoconnect: ${e.message}`, 'warn');
   }
@@ -2423,6 +2639,11 @@ app.whenReady().then(async () => {
   getBlohunterBridge().setLiveAccountProvider(() => fetchLiveCoinbaseAccount({ quiet: true }));
 
   autoconnectHermes();
+  setTimeout(() => {
+    autoSelectWorkingFreeModel().catch((e) => {
+      appendLog(`ℹ Free-model auto-ping failed: ${e.message}`, 'info');
+    });
+  }, 8000);
   await checkForUpdates(true);
   const updateInterval = setInterval(() => checkForUpdates(true), 5 * 60 * 1000);
   app.on('quit', () => clearInterval(updateInterval));
