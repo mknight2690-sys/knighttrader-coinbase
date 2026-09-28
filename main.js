@@ -2602,6 +2602,8 @@ app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 app.commandLine.appendSwitch('log-level', '3');
 
+const UPDATE_CHECK_INTERVAL_MS = 60 * 1000;
+
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
 autoUpdater.logger = {
@@ -2708,7 +2710,8 @@ app.whenReady().then(async () => {
     });
   }, 8000);
   await checkForUpdates(true);
-  const updateInterval = setInterval(() => checkForUpdates(true), 5 * 60 * 1000);
+  const updateInterval = setInterval(() => checkForUpdates(true), UPDATE_CHECK_INTERVAL_MS);
+  updateInterval.unref?.();
   app.on('quit', () => clearInterval(updateInterval));
 
   app.on('activate', () => {
