@@ -2,10 +2,10 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 const SUCCESS_URL =
   'https://mknight2690-sys.github.io/knighttrader-coinbase-site/?purchase=success&utm_source=stripe';
-const PRODUCT_NAME = 'KnightTrader Coinbase';
+const PRODUCT_NAME = 'KnightTrader Propr';
 const PRICE_CENTS = 4700;
 const METADATA_KEY = 'kt_product';
-const METADATA_VAL = 'knighttrader-coinbase-47-mo';
+const METADATA_VAL = 'knighttrader-propr-47-mo';
 
 function loadSecretKey(keyFile) {
   if (process.env.STRIPE_SECRET_KEY) return process.env.STRIPE_SECRET_KEY.trim();
@@ -39,7 +39,7 @@ async function findOrCreateProduct(secretKey) {
   if (existing) return existing;
   return stripe(secretKey, '/products', 'POST', {
     name: PRODUCT_NAME,
-    description: 'Desktop app for Coinbase perpetual futures. Updates and continued all-in-one agent access. $47 per month.',
+    description: 'Desktop app for Propr challenge auto-trading on Hyperliquid perps. Updates and continued all-in-one Hermes agent access. $47 per month.',
     [`metadata[${METADATA_KEY}]`]: METADATA_VAL,
   });
 }
