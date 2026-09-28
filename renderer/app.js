@@ -140,11 +140,22 @@ async function populateNousModels() {
   const previous = el.nousModel.value;
   try {
     const catalog = await window.kt.getNousModels();
-    if (!catalog?.free?.length) return;
+    if (!catalog?.nvidia?.length && !catalog?.free?.length) return;
     el.nousModel.innerHTML = '';
+    if (catalog.nvidia?.length) {
+      const nvidiaGroup = document.createElement('optgroup');
+      nvidiaGroup.label = 'NVIDIA NIM (free · benchmark order)';
+      for (const model of catalog.nvidia) {
+        const opt = document.createElement('option');
+        opt.value = model.id;
+        opt.textContent = model.label || model.id;
+        nvidiaGroup.appendChild(opt);
+      }
+      el.nousModel.appendChild(nvidiaGroup);
+    }
     const freeGroup = document.createElement('optgroup');
-    freeGroup.label = 'Free tier';
-    for (const model of catalog.free) {
+    freeGroup.label = 'Nous free tier';
+    for (const model of (catalog.free || [])) {
       const opt = document.createElement('option');
       opt.value = model.id;
       opt.textContent = model.label || model.id;
@@ -162,7 +173,7 @@ async function populateNousModels() {
       }
       el.nousModel.appendChild(paidGroup);
     }
-    setNousModelValue(previous || catalog.defaultModel || 'tencent/hy3:free');
+    setNousModelValue(previous || catalog.defaultModel || catalog.nvidia?.[0]?.id || 'tencent/hy3:free');
   } catch (_) {}
 }
 

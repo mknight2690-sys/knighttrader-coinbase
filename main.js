@@ -25,6 +25,16 @@ protocol.registerSchemesAsPrivileged([
 const NOUS_INFERENCE_URL = 'https://inference-api.nousresearch.com/v1/chat/completions';
 const NOUS_INFERENCE_BASE = 'https://inference-api.nousresearch.com/v1';
 const NOUS_RECOMMENDED_MODELS_URL = 'https://portal.nousresearch.com/api/nous/recommended-models';
+const NVIDIA_INFERENCE_BASE = 'https://integrate.api.nvidia.com/v1';
+const NVIDIA_INFERENCE_URL = `${NVIDIA_INFERENCE_BASE}/chat/completions`;
+
+// NVIDIA NIM free models (pengsonal / build.nvidia.com) — benchmark score orders auto-ping (best first).
+const NVIDIA_BENCHMARK_MODELS = [
+  { id: 'moonshotai/kimi-k3', label: 'Kimi K3 (NVIDIA NIM · free)', benchmark: 100 },
+  { id: 'z-ai/glm-5.3', label: 'GLM 5.3 (NVIDIA NIM · free)', benchmark: 95 },
+  { id: 'deepseek-ai/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash (NVIDIA NIM · free)', benchmark: 90 },
+  { id: 'z-ai/glm-5.3-flash', label: 'GLM 5.3 Flash (NVIDIA NIM · free)', benchmark: 85 },
+];
 const DASHBOARD_PORT = 9130;
 const DASHBOARD_URL = `http://127.0.0.1:${DASHBOARD_PORT}`;
 
@@ -75,6 +85,7 @@ const FALLBACK_PAID_NOUS_MODELS = [
 
 const DEFAULTS = {
   propr: { apiKey: '', accountId: '' },
+  nvidia: { apiKey: '' },
   nous: { apiKey: '', model: DEFAULT_NOUS_MODEL },
   settings: { notifySounds: true },
 };
@@ -111,6 +122,8 @@ function migrateStoreData(raw) {
     accountId: String(merged.propr.accountId || '').trim(),
   };
   delete merged.coinbase;
+  if (!merged.nvidia) merged.nvidia = { apiKey: '' };
+  merged.nvidia = { apiKey: String(merged.nvidia.apiKey || '').trim() };
   if (merged.nous) {
     merged.nous = {
       apiKey: merged.nous.apiKey || '',
@@ -118,6 +131,69 @@ function migrateStoreData(raw) {
     };
   }
   return merged;
+}
+
+function bootstrapNvidiaKeyFromDocuments() {
+  if (String(storeData.nvidia?.apiKey || '').trim()) return false;
+  const candidates = [
+    path.join(os.homedir(), 'OneDrive', 'Documents', 'Nvidia API Key.txt'),
+    path.join(os.homedir(), 'Documents', 'Nvidia API Key.txt'),
+    path.join(os.homedir(), 'Downloads', 'Nvidia API Key.txt'),
+  ];
+  for (const filePath of candidates) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const key = fs.readFileSync(filePath, 'utf8').trim();
+      if (!/^nvapi-/i.test(key)) continue;
+      storeData.nvidia = { apiKey: key };
+      saveStore(storeData);
+      appendLog(`🔑 Loaded NVIDIA API key from ${filePath}`, 'success');
+      return true;
+    } catch {}
+  }
+  return false;
+}
+
+function isNvidiaModel(modelId) {
+  const id = String(modelId || '').trim();
+  return NVIDIA_BENCHMARK_MODELS.some((m) => m.id === id);
+}
+
+function resolveInferenceForModel(modelId) {
+  if (isNvidiaModel(modelId)) {
+    return {
+      provider: 'nvidia',
+      baseUrl: NVIDIA_INFERENCE_BASE,
+      chatUrl: NVIDIA_INFERENCE_URL,
+      apiKeyEnv: 'NVIDIA_API_KEY',
+      pingTimeoutMs: 120000,
+    };
+  }
+  return {
+    provider: 'nous',
+    baseUrl: NOUS_INFERENCE_BASE,
+    chatUrl: NOUS_INFERENCE_URL,
+    apiKeyEnv: 'NOUS_API_KEY',
+    pingTimeoutMs: 25000,
+  };
+}
+
+function resolveApiKeyForModel(modelId, nousKeyOverride = '') {
+  const inf = resolveInferenceForModel(modelId);
+  if (inf.provider === 'nvidia') {
+    return { ...inf, apiKey: String(storeData.nvidia?.apiKey || '').trim() };
+  }
+  return { ...inf, apiKey: String(nousKeyOverride || storeData.nous?.apiKey || '').trim() };
+}
+
+function extractChatReply(parsed) {
+  const msg = parsed?.choices?.[0]?.message;
+  return String(
+    msg?.content?.trim()
+    || msg?.reasoning_content?.trim()
+    || parsed?.choices?.[0]?.text?.trim()
+    || '',
+  );
 }
 
 let storeData = loadStoredData();
@@ -212,6 +288,7 @@ function applyCredentialMapping(target, kv) {
       set('nous', 'model', normalizeNousModel(value));
     } else if (key === 'propr_api_key' || key === 'api_key' || key === 'x_api_key') set('propr', 'apiKey', value);
     else if (key === 'propr_account_id' || key === 'account_id') set('propr', 'accountId', value);
+    else if (key === 'nvidia_api_key' || key === 'nvapi_key') set('nvidia', 'apiKey', value);
   }
 }
 
@@ -225,6 +302,10 @@ function finalizeNousCredentials(parsed, text) {
   if (!parsed.propr.apiKey) {
     const pkLine = lines.find((line) => /^pk_live_/i.test(line));
     if (pkLine) parsed.propr.apiKey = pkLine.trim();
+  }
+  if (!parsed.nvidia.apiKey) {
+    const nvLine = lines.find((line) => /^nvapi-/i.test(line));
+    if (nvLine) parsed.nvidia.apiKey = nvLine.trim();
   }
 
   if (parsed.nous.apiKey) return;
@@ -271,6 +352,9 @@ function mergeCredentialObjects(target, source) {
     if (source.propr.apiKey) target.propr.apiKey = String(source.propr.apiKey).trim();
     if (source.propr.accountId) target.propr.accountId = String(source.propr.accountId).trim();
   }
+  if (source.nvidia && typeof source.nvidia === 'object') {
+    if (source.nvidia.apiKey) target.nvidia.apiKey = String(source.nvidia.apiKey).trim();
+  }
   if (source.coinbase?.apiKey && !target.propr.apiKey) {
     target.propr.apiKey = String(source.coinbase.apiKey).trim();
   }
@@ -280,6 +364,7 @@ function parseCredentialFileContent(content) {
   const parsed = {
     nous: { apiKey: '', model: '' },
     propr: { apiKey: '', accountId: '' },
+    nvidia: { apiKey: '' },
   };
   const text = String(content || '').trim();
   if (!text) return parsed;
@@ -732,74 +817,27 @@ async function testProprCredentials(credentials) {
   return result;
 }
 
-function testNousCredentials(apiKey, model) {
-  const key = String(apiKey || '').trim();
+async function testNousCredentials(apiKey, model) {
   const mdl = normalizeNousModel(model);
-  if (!key) return Promise.resolve({ ok: false, error: 'Portal API key is required.' });
-  if (!mdl) return Promise.resolve({ ok: false, error: 'Select a Nous model first.' });
+  if (!mdl) return { ok: false, error: 'Select a model first.' };
+  const resolved = resolveApiKeyForModel(mdl, apiKey);
+  if (!resolved.apiKey) {
+    return {
+      ok: false,
+      error: resolved.provider === 'nvidia'
+        ? 'NVIDIA API key is required for this model.'
+        : 'Portal API key is required.',
+    };
+  }
 
-  const body = JSON.stringify({
-    model: mdl,
-    messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
-    max_tokens: 16,
-    temperature: 0,
-  });
-
-  appendLog(`🧪 Testing Nous credentials (${mdl})…`, 'info');
-
-  return new Promise((resolve) => {
-    const req = https.request(NOUS_INFERENCE_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${key}`,
-        'Content-Length': Buffer.byteLength(body),
-        'User-Agent': '6SystemTradingApp/1.0',
-      },
-      timeout: 45000,
-    }, (res) => {
-      let raw = '';
-      res.on('data', (chunk) => { raw += chunk; });
-      res.on('end', () => {
-        let parsed;
-        try { parsed = JSON.parse(raw); } catch { parsed = null; }
-
-        if (res.statusCode >= 200 && res.statusCode < 300 && parsed) {
-          const reply = parsed?.choices?.[0]?.message?.content?.trim()
-            || parsed?.choices?.[0]?.text?.trim()
-            || '';
-          appendLog(`✅ Nous test passed (${mdl})${reply ? `: ${reply.slice(0, 80)}` : ''}`, 'success');
-          resolve({
-            ok: true,
-            model: mdl,
-            reply: reply || '(empty reply — key works)',
-            status: res.statusCode,
-          });
-          return;
-        }
-
-        const errMsg = parsed?.error?.message
-          || parsed?.message
-          || (typeof parsed?.error === 'string' ? parsed.error : null)
-          || raw.slice(0, 200)
-          || `HTTP ${res.statusCode}`;
-        appendLog(`✗ Nous test failed (${res.statusCode}): ${errMsg}`, 'error');
-        resolve({ ok: false, error: errMsg, status: res.statusCode, model: mdl });
-      });
-    });
-
-    req.on('timeout', () => {
-      req.destroy();
-      appendLog('✗ Nous test timed out after 45s', 'error');
-      resolve({ ok: false, error: 'Request timed out after 45 seconds.' });
-    });
-    req.on('error', (e) => {
-      appendLog(`✗ Nous test error: ${e.message}`, 'error');
-      resolve({ ok: false, error: e.message });
-    });
-    req.write(body);
-    req.end();
-  });
+  appendLog(`🧪 Testing ${resolved.provider} model (${mdl})…`, 'info');
+  const res = await pingInferenceModel(resolved.apiKey, mdl, resolved.pingTimeoutMs);
+  if (res.ok) {
+    appendLog(`✅ Model test passed (${mdl}): ${String(res.reply).slice(0, 80)}`, 'success');
+    return { ok: true, model: mdl, reply: res.reply, provider: resolved.provider };
+  }
+  appendLog(`✗ Model test failed (${mdl}): ${res.error}`, 'error');
+  return { ok: false, error: res.error, model: mdl, provider: resolved.provider };
 }
 
 function catalogModelEntry(modelName, free) {
@@ -816,7 +854,18 @@ function preferDefaultFreeModels(free) {
   return [{ id: DEFAULT_NOUS_MODEL, label: `${DEFAULT_NOUS_MODEL} (free)`, free: true }, ...rest];
 }
 
+function sortedNvidiaBenchmarkModels() {
+  return [...NVIDIA_BENCHMARK_MODELS].sort((a, b) => b.benchmark - a.benchmark);
+}
+
+function isRateLimitHttpError(status, raw) {
+  if (status === 429 || status === 503 || status === 502) return true;
+  return /rate.?limit|too many requests|quota|capacity|overloaded|throttl/i.test(String(raw || ''));
+}
+
 async function fetchNousModelCatalog() {
+  const nvidia = sortedNvidiaBenchmarkModels();
+  const hasNvidiaKey = !!String(storeData.nvidia?.apiKey || '').trim();
   try {
     const res = await httpsRequest(NOUS_RECOMMENDED_MODELS_URL, { timeout: 15000 });
     const parsed = JSON.parse(res.raw);
@@ -832,7 +881,8 @@ async function fetchNousModelCatalog() {
     if (free.length) {
       return {
         ok: true,
-        defaultModel: DEFAULT_NOUS_MODEL,
+        defaultModel: hasNvidiaKey ? nvidia[0]?.id : DEFAULT_NOUS_MODEL,
+        nvidia,
         free,
         paid: paid.length ? paid : FALLBACK_PAID_NOUS_MODELS,
         source: 'live',
@@ -843,30 +893,33 @@ async function fetchNousModelCatalog() {
   }
   return {
     ok: true,
-    defaultModel: DEFAULT_NOUS_MODEL,
+    defaultModel: hasNvidiaKey ? nvidia[0]?.id : DEFAULT_NOUS_MODEL,
+    nvidia,
     free: FALLBACK_FREE_NOUS_MODELS,
     paid: FALLBACK_PAID_NOUS_MODELS,
     source: 'fallback',
   };
 }
 
-function pingNousModel(apiKey, model, timeoutMs = 25000) {
-  const key = String(apiKey || '').trim();
+function pingInferenceModel(apiKey, model, timeoutMs) {
   const mdl = normalizeNousModel(model);
-  if (!key) return Promise.resolve({ ok: false, error: 'no-api-key' });
-  if (!mdl) return Promise.resolve({ ok: false, error: 'no-model' });
+  const inf = resolveInferenceForModel(mdl);
+  const key = String(apiKey || '').trim();
+  if (!key) return Promise.resolve({ ok: false, error: 'no-api-key', model: mdl, provider: inf.provider });
+  if (!mdl) return Promise.resolve({ ok: false, error: 'no-model', provider: inf.provider });
 
   const body = JSON.stringify({
     model: mdl,
     messages: [{ role: 'user', content: 'Reply with exactly: PONG' }],
-    max_tokens: 8,
+    max_tokens: 64,
     temperature: 0,
   });
+  const waitMs = timeoutMs || inf.pingTimeoutMs || 25000;
 
   return new Promise((resolve) => {
     let settled = false;
     const done = (result) => { if (!settled) { settled = true; resolve(result); } };
-    const req = https.request(NOUS_INFERENCE_URL, {
+    const req = https.request(inf.chatUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -874,29 +927,79 @@ function pingNousModel(apiKey, model, timeoutMs = 25000) {
         'Content-Length': Buffer.byteLength(body),
         'User-Agent': 'KnightTrader-Propr/2.0',
       },
-      timeout: timeoutMs,
+      timeout: waitMs,
     }, (res) => {
       let raw = '';
       res.on('data', (chunk) => { raw += chunk; });
       res.on('end', () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
+        const status = res.statusCode || 0;
+        if (status >= 200 && status < 300) {
           let parsed = null;
           try { parsed = JSON.parse(raw); } catch { parsed = null; }
-          const reply = parsed?.choices?.[0]?.message?.content?.trim()
-            || parsed?.choices?.[0]?.text?.trim()
-            || '';
-          if (reply) done({ ok: true, model: mdl, reply });
-          else done({ ok: false, error: 'empty-reply', model: mdl });
-        } else {
-          done({ ok: false, error: `http-${res.statusCode}`, model: mdl });
+          const reply = extractChatReply(parsed);
+          if (reply) {
+            done({ ok: true, model: mdl, reply, provider: inf.provider });
+          } else {
+            done({ ok: false, error: 'empty-reply', model: mdl, provider: inf.provider });
+          }
+          return;
         }
+        const rateLimited = isRateLimitHttpError(status, raw);
+        done({
+          ok: false,
+          error: rateLimited ? `rate-limit-${status}` : `http-${status}`,
+          model: mdl,
+          provider: inf.provider,
+          rateLimited,
+        });
       });
     });
-    req.on('timeout', () => { req.destroy(); done({ ok: false, error: 'timeout', model: mdl }); });
-    req.on('error', (e) => done({ ok: false, error: e.message, model: mdl }));
+    req.on('timeout', () => { req.destroy(); done({ ok: false, error: 'timeout', model: mdl, provider: inf.provider }); });
+    req.on('error', (e) => done({ ok: false, error: e.message, model: mdl, provider: inf.provider }));
     req.write(body);
     req.end();
   });
+}
+
+function pingNousModel(apiKey, model, timeoutMs = 25000) {
+  return pingInferenceModel(apiKey, model, timeoutMs);
+}
+
+async function buildModelPingCandidates() {
+  bootstrapNvidiaKeyFromDocuments();
+  const nvidiaKey = String(storeData.nvidia?.apiKey || '').trim();
+  const nousKey = String(storeData.nous?.apiKey || '').trim();
+  const candidates = [];
+
+  if (nvidiaKey) {
+    for (const m of sortedNvidiaBenchmarkModels()) {
+      candidates.push({
+        id: m.id,
+        label: m.label,
+        benchmark: m.benchmark,
+        provider: 'nvidia',
+        apiKey: nvidiaKey,
+      });
+    }
+  }
+
+  if (nousKey) {
+    const catalog = await fetchNousModelCatalog();
+    const free = Array.isArray(catalog?.free) && catalog.free.length
+      ? catalog.free
+      : FALLBACK_FREE_NOUS_MODELS;
+    for (const m of free) {
+      candidates.push({
+        id: m.id,
+        label: m.label,
+        benchmark: 0,
+        provider: 'nous',
+        apiKey: nousKey,
+      });
+    }
+  }
+
+  return candidates;
 }
 
 function sendToRenderer(channel, payload) {
@@ -925,10 +1028,11 @@ async function updateCronModelOnly(model) {
     return { ok: false, msg: 'no-existing-job' };
   }
   const existingPrompt = existing.prompt || existing.spec?.prompt || null;
+  const inf = resolveInferenceForModel(mdl);
   const updates = {
     name: 'propr-perp-trading',
     provider: 'custom',
-    base_url: NOUS_INFERENCE_BASE,
+    base_url: inf.baseUrl,
     model: mdl,
   };
   if (existingPrompt) updates.prompt = existingPrompt;
@@ -950,66 +1054,87 @@ async function updateCronModelOnly(model) {
 }
 
 let freeModelSelectPromise = null;
-let lastFreeModelPick = null;
+let lastModelPingAt = 0;
 
-async function autoSelectWorkingFreeModelOnce() {
-  const apiKey = String(storeData.nous?.apiKey || '').trim();
-  if (!apiKey) {
-    appendLog('ℹ Skipping free-model auto-ping: no Nous API key saved.', 'info');
+async function applyModelSwitch(mdl, { reply, reason } = {}) {
+  const previous = normalizeNousModel(storeData.nous?.model || DEFAULT_NOUS_MODEL);
+  const changed = mdl !== previous;
+  storeData.nous = { ...(storeData.nous || {}), model: mdl };
+  saveStore(storeData);
+
+  try { syncHermesConfig(); } catch (e) {
+    appendLog(`ℹ Hermes model sync skipped: ${e.message}`, 'info');
+  }
+  if (changed) {
+    try {
+      await updateCronModelOnly(mdl);
+    } catch (e) {
+      appendLog(`ℹ Cron model forward skipped: ${e.message}`, 'info');
+    }
+  }
+
+  if (changed) {
+    const inf = resolveInferenceForModel(mdl);
+    appendLog(
+      `🔄 Model switch ${previous} → ${mdl} (${inf.provider}${reason ? ` · ${reason}` : ''})`,
+      'success',
+    );
+  }
+  sendToRenderer('kt-free-model-selected', { model: mdl, reply, changed });
+  return { ok: true, model: mdl, reply, changed, previous };
+}
+
+async function autoSelectWorkingFreeModelOnce({ quiet = false } = {}) {
+  const candidates = await buildModelPingCandidates();
+  if (!candidates.length) {
+    if (!quiet) appendLog('ℹ Skipping model auto-ping: no NVIDIA or Nous API key saved.', 'info');
     return { ok: false, reason: 'no-api-key' };
   }
-  const catalog = await fetchNousModelCatalog();
-  const candidates = Array.isArray(catalog?.free) && catalog.free.length
-    ? catalog.free
-    : FALLBACK_FREE_NOUS_MODELS;
-  if (!candidates.length) {
-    appendLog('ℹ Skipping free-model auto-ping: no free models available.', 'info');
-    return { ok: false, reason: 'no-free-models' };
-  }
 
-  appendLog(`🔎 Auto-pinging ${candidates.length} free models to find a working one…`, 'info');
   const current = normalizeNousModel(storeData.nous?.model || DEFAULT_NOUS_MODEL);
-  const ordered = [
-    ...candidates.filter((m) => normalizeNousModel(m.id) === current),
-    ...candidates.filter((m) => normalizeNousModel(m.id) !== current),
-  ];
-
-  for (const candidate of ordered) {
-    const mdl = normalizeNousModel(candidate.id);
-    appendLog(`  → ping ${mdl}…`, 'info');
-    const res = await pingNousModel(apiKey, mdl, 25000);
-    if (res.ok) {
-      appendLog(`✅ Working free model found: ${mdl} — "${String(res.reply).slice(0, 40)}"`, 'success');
-      const changed = mdl !== current;
-      storeData.nous = { ...(storeData.nous || {}), model: mdl };
-      saveStore(storeData);
-      try { syncHermesConfig(); } catch (e) {
-        appendLog(`ℹ Hermes model sync skipped: ${e.message}`, 'info');
-      }
-      try {
-        await updateCronModelOnly(mdl);
-      } catch (e) {
-        appendLog(`ℹ Cron model forward skipped: ${e.message}`, 'info');
-      }
-      sendToRenderer('kt-free-model-selected', { model: mdl, reply: res.reply, changed });
-      return { ok: true, model: mdl, reply: res.reply, changed };
-    }
-    appendLog(`  ✗ ${mdl}: ${res.error || 'no pong'}`, 'warn');
+  if (!quiet) {
+    appendLog(
+      `🔎 Auto-ping ${candidates.length} models (NVIDIA benchmark order, then Nous free)…`,
+      'info',
+    );
   }
 
-  appendLog('⚠ No free model responded. Keeping current selection; cron may produce incomplete ticks.', 'warn');
+  for (const candidate of candidates) {
+    const mdl = normalizeNousModel(candidate.id);
+    const inf = resolveInferenceForModel(mdl);
+    const pingTimeout = inf.provider === 'nvidia' ? 90000 : 25000;
+    if (!quiet) {
+      appendLog(
+        `  → ping ${mdl} (${inf.provider}${candidate.benchmark ? ` · bench ${candidate.benchmark}` : ''})…`,
+        'info',
+      );
+    }
+    const res = await pingInferenceModel(candidate.apiKey, mdl, pingTimeout);
+    if (res.ok) {
+      if (!quiet) {
+        appendLog(`✅ Model pong: ${mdl} — "${String(res.reply).slice(0, 40)}"`, 'success');
+      }
+      lastModelPingAt = Date.now();
+      return applyModelSwitch(mdl, { reply: res.reply, reason: 'ping-ok' });
+    }
+    const errLabel = res.rateLimited ? `${res.error} (rate limit)` : (res.error || 'no pong');
+    if (!quiet) appendLog(`  ✗ ${mdl}: ${errLabel}`, 'warn');
+  }
+
+  if (!quiet) {
+    appendLog(
+      `⚠ No model responded (current: ${current}). Cron may fail until next minute ping.`,
+      'warn',
+    );
+  }
   sendToRenderer('kt-free-model-selected', { model: current, changed: false, failed: true });
+  lastModelPingAt = Date.now();
   return { ok: false, reason: 'all-failed', model: current };
 }
 
-function autoSelectWorkingFreeModel() {
-  if (lastFreeModelPick?.ok) return Promise.resolve(lastFreeModelPick);
+function autoSelectWorkingFreeModel(options = {}) {
   if (freeModelSelectPromise) return freeModelSelectPromise;
-  freeModelSelectPromise = autoSelectWorkingFreeModelOnce()
-    .then((result) => {
-      lastFreeModelPick = result;
-      return result;
-    })
+  freeModelSelectPromise = autoSelectWorkingFreeModelOnce(options)
     .finally(() => {
       freeModelSelectPromise = null;
     });
@@ -1174,11 +1299,12 @@ function syncHermesConfig() {
   const installStatus = checkHermesInstalled();
   if (!installStatus.installed) return { ok: true, skipped: true };
   const model = storeData.nous?.model || DEFAULT_NOUS_MODEL;
+  const inf = resolveInferenceForModel(model);
   const configSets = [
     ['model.provider', 'custom'],
     ['model.default', model],
-    ['model.base_url', NOUS_INFERENCE_BASE],
-    ['model.api_key', '${NOUS_API_KEY}'],
+    ['model.base_url', inf.baseUrl],
+    ['model.api_key', `\${${inf.apiKeyEnv}}`],
   ];
   try {
     for (const [key, value] of configSets) {
@@ -1189,7 +1315,7 @@ function syncHermesConfig() {
         windowsHide: true,
       });
     }
-    appendLog('✅ Hermes config synced for Nous Portal API key', 'success');
+    appendLog(`✅ Hermes config synced (${inf.provider} · ${model})`, 'success');
     return { ok: true };
   } catch (e) {
     appendLog(`⚠ Hermes config sync: ${e.message}`, 'warn');
@@ -1211,6 +1337,8 @@ async function syncHermesCredentials(token, { restartGateway = false } = {}) {
   const before = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
   let after = upsertEnvVar(before, 'NOUS_API_KEY', nousKey);
   after = upsertEnvVar(after, 'NOUSRESEARCH_API_KEY', nousKey);
+  const nvidiaKey = String(storeData.nvidia?.apiKey || '').trim();
+  if (nvidiaKey) after = upsertEnvVar(after, 'NVIDIA_API_KEY', nvidiaKey);
 
   const propr = storeData.propr || {};
   if (propr.apiKey) after = upsertEnvVar(after, 'PROPR_API_KEY', propr.apiKey);
@@ -1227,6 +1355,7 @@ async function syncHermesCredentials(token, { restartGateway = false } = {}) {
     const envVars = {
       NOUS_API_KEY: nousKey,
       NOUSRESEARCH_API_KEY: nousKey,
+      ...(nvidiaKey ? { NVIDIA_API_KEY: nvidiaKey } : {}),
       ...(propr.apiKey ? { PROPR_API_KEY: propr.apiKey } : {}),
       ...(propr.accountId ? { PROPR_ACCOUNT_ID: propr.accountId } : {}),
     };
@@ -2184,12 +2313,14 @@ async function configureCron() {
   appendLog('🔧 configureCron: gateway ready', 'info');
 
   const prompt = buildCronPrompt();
+  const cronModel = storeData.nous?.model || DEFAULT_NOUS_MODEL;
+  const cronInf = resolveInferenceForModel(cronModel);
   const jobSpec = {
     name: 'propr-perp-trading',
     schedule: 'every 5m',
     provider: 'custom',
-    base_url: NOUS_INFERENCE_BASE,
-    model: storeData.nous?.model || DEFAULT_NOUS_MODEL,
+    base_url: cronInf.baseUrl,
+    model: cronModel,
     deliver: 'local',
     prompt,
   };
@@ -2612,6 +2743,7 @@ app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 app.commandLine.appendSwitch('log-level', '3');
 
 const UPDATE_CHECK_INTERVAL_MS = 60 * 1000;
+const MODEL_PING_INTERVAL_MS = 60 * 1000;
 
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
@@ -2681,8 +2813,7 @@ async function autoconnectHermes() {
     const cron = await configureCron();
     if (cron?.ok) appendLog('Propr cron configured on launch.', 'success');
     else appendLog(`Cron autoconfig: ${cron?.msg || 'needs setup'}`, 'warn');
-    const picked = await autoSelectWorkingFreeModel();
-    if (picked?.model) await updateCronModelOnly(picked.model);
+    await autoSelectWorkingFreeModel();
   } catch (e) {
     appendLog(`Hermes autoconnect: ${e.message}`, 'warn');
   }
@@ -2712,16 +2843,26 @@ app.whenReady().then(async () => {
   else appendLog('⚠ BloHunter Connect not found — Trading tab needs Downloads\\blohunter-connect', 'warn');
   getBlohunterBridge().setLiveAccountProvider(() => fetchLiveProprAccount({ quiet: true }));
 
+  bootstrapNvidiaKeyFromDocuments();
   autoconnectHermes();
   setTimeout(() => {
     autoSelectWorkingFreeModel().catch((e) => {
-      appendLog(`ℹ Free-model auto-ping failed: ${e.message}`, 'info');
+      appendLog(`ℹ Model auto-ping failed: ${e.message}`, 'info');
     });
   }, 8000);
   await checkForUpdates(true);
   const updateInterval = setInterval(() => checkForUpdates(true), UPDATE_CHECK_INTERVAL_MS);
   updateInterval.unref?.();
-  app.on('quit', () => clearInterval(updateInterval));
+  const modelPingInterval = setInterval(() => {
+    autoSelectWorkingFreeModel({ quiet: true }).catch((e) => {
+      appendLog(`ℹ Minute model ping failed: ${e.message}`, 'warn');
+    });
+  }, MODEL_PING_INTERVAL_MS);
+  modelPingInterval.unref?.();
+  app.on('quit', () => {
+    clearInterval(updateInterval);
+    clearInterval(modelPingInterval);
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
