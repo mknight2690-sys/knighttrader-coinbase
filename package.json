@@ -1,12 +1,14 @@
 {
   "name": "knight-trader-coinbase",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "KnightTrader Coinbase — Hermes credential manager & launcher",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "package": "electron-builder"
+    "package": "electron-builder",
+    "build:win": "electron-builder --win --publish always",
+    "build:mac": "electron-builder --mac --publish always"
   },
   "build": {
     "appId": "com.knighttrader.coinbase",
@@ -23,6 +25,12 @@
       "target": "dmg",
       "icon": "assets/icon.icns",
       "category": "public.app-category.finance"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "mknight2690-sys",
+      "repo": "knighttrader-coinbase",
+      "releaseType": "release"
     }
   },
   "dependencies": {

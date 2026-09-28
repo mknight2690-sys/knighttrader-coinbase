@@ -481,6 +481,9 @@ class BlohunterBridge {
     this.httpPort = 0;
     this.gateTimer = null;
     this.handshakeTimer = null;
+    this.livePollTimer = null;
+    this.liveCoinbase = null;
+    this.liveAccountProvider = null;
     this.dashboardFetchTail = Promise.resolve();
     this.lastKnownOpenPositions = [];
     this.lastKnownOpenPositionKeys = new Set();
@@ -694,7 +697,7 @@ class BlohunterBridge {
     const keys = this.storage.pick('session', ['apiKey']);
     if (!String(keys.apiKey || '').trim()) {
       this.ensureGrowthChartLayout();
-      this.log('[BloHunter] Equity curve: waiting for Blofin keys');
+      this.log('[BloHunter] Equity curve: waiting for Coinbase keys');
       return;
     }
     await this.applyDesktopTradingGate();
@@ -722,7 +725,7 @@ class BlohunterBridge {
     const now = Date.now();
     const merged = mergeEquityRangeAnchors(existing, equity, settled, now);
     this.storage.setArea('local', { [ACCOUNT_EQUITY_HISTORY_KEY]: merged });
-    this.log(`[BloHunter] Equity curve seeded at ${equity.toFixed(2)} USDT across 1D/1W/1M/3M (${merged.length} points)`);
+    this.log(`[BloHunter] Equity curve seeded at ${equity.toFixed(2)} USDC across 1D/1W/1M/3M (${merged.length} points)`);
     this.nudgeEquityChart();
   }
 
@@ -842,6 +845,56 @@ class BlohunterBridge {
     return sum;
   }
 
+  setLiveAccountProvider(provider) {
+    this.liveAccountProvider = typeof provider === 'function' ? provider : null;
+  }
+
+  applyLiveCoinbaseBalances(data) {
+    const live = this.liveCoinbase;
+    if (!live || !live.ok || !live.fetchedAt || !data?.balances) return;
+    data.balances.totalEquity = Number(live.totalEquity) || 0;
+    data.balances.settledEquity = Number(live.totalEquity) || 0;
+    data.balances.totalAvailable = Number(live.totalAvailable) || 0;
+    if (Array.isArray(live.accountRows) && live.accountRows.length) {
+      data.balances.account = live.accountRows;
+    }
+  }
+
+  startLiveAccountPoll() {
+    if (this.livePollTimer) return;
+    const tick = () => {
+      if (!this.started || !this.liveAccountProvider) return;
+      this.liveAccountProvider()
+        .then((live) => {
+          if (live && live.ok) {
+            this.liveCoinbase = live;
+            this.nudgeEquityChart();
+          }
+        })
+        .catch((err) => this.log('[Coinbase] live account poll:', err.message));
+    };
+    tick();
+    this.livePollTimer = setInterval(tick, 8000);
+    this.livePollTimer.unref?.();
+  }
+
+  stopLiveAccountPoll() {
+    if (this.livePollTimer) {
+      clearInterval(this.livePollTimer);
+      this.livePollTimer = null;
+    }
+  }
+
+  async refreshLiveCoinbaseAccount() {
+    if (!this.liveAccountProvider) return;
+    try {
+      const live = await this.liveAccountProvider();
+      if (live && live.ok) this.liveCoinbase = live;
+    } catch (err) {
+      this.log('[Coinbase] live account read:', err.message);
+    }
+  }
+
   async enrichDashboardSnapshot(result) {
     if (!result || typeof result !== 'object') return result;
     if (!result.ok || !result.data || typeof result.data !== 'object') {
@@ -852,6 +905,7 @@ class BlohunterBridge {
     if (!data.balances || typeof data.balances !== 'object') {
       data.balances = {};
     }
+    this.applyLiveCoinbaseBalances(data);
     const accountRows = Array.isArray(data.balances.account) ? data.balances.account : [];
     const liveAvailable = this.liveAvailableFromSnapshot(data);
     if (!(Number(data.balances.totalAvailable) > 0) && liveAvailable > 0) {
@@ -1069,6 +1123,8 @@ class BlohunterBridge {
       ) {
         await this.refreshGatewaySignal('trading-tab-resync');
       }
+      await this.refreshLiveCoinbaseAccount();
+      this.startLiveAccountPoll();
       runSeed();
       return { ok: true, url: this.getDashboardUrl(), already: true };
     }
@@ -1085,7 +1141,9 @@ class BlohunterBridge {
       this.startDesktopGateKeeper();
       this.startHandshakeWatchdog();
       this.ensureGrowthChartLayout();
+      await this.refreshLiveCoinbaseAccount();
       this.started = true;
+      this.startLiveAccountPoll();
       runSeed();
       return { ok: true, url: this.getDashboardUrl(), root: this.connectRoot };
     } catch (err) {
@@ -1095,6 +1153,7 @@ class BlohunterBridge {
   }
 
   async stop() {
+    this.stopLiveAccountPoll();
     if (this.handshakeTimer) {
       clearInterval(this.handshakeTimer);
       this.handshakeTimer = null;

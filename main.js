@@ -396,20 +396,29 @@ function coinbaseBase64url(input) {
 
 function importCoinbaseSecret(secret) {
   const trimmed = String(secret || '').trim();
-  if (!trimmed) throw new Error('secret is empty');
+  if (!trimmed) throw new Error('Private key is empty');
 
-  const raw = trimmed.replace(/\s+/g, '');
-  if (!/^[A-Za-z0-9+/=]+$/.test(raw)) {
-    throw new Error('non-base64-private-key-format');
+  if (trimmed.startsWith('{')) {
+    let parsed;
+    try { parsed = JSON.parse(trimmed); } catch { parsed = null; }
+    const nested = parsed?.privateKey || parsed?.private_key || parsed?.secret;
+    if (nested) return importCoinbaseSecret(nested);
   }
 
-  const secretBytes = trimmed.includes('\n') || trimmed.includes('-----BEGIN')
-    ? Buffer.from(trimmed)
-    : Buffer.from(raw, 'base64');
+  if (trimmed.includes('BEGIN')) {
+    const pem = trimmed.includes('\\n') ? trimmed.replace(/\\n/g, '\n') : trimmed;
+    return crypto.createPrivateKey(pem);
+  }
 
+  const raw = trimmed.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+  if (!/^[A-Za-z0-9+/=]+$/.test(raw)) {
+    throw new Error('Unrecognized Coinbase private key. Paste the EC PEM or Ed25519 key from the CDP download.');
+  }
+
+  const secretBytes = Buffer.from(raw, 'base64');
   if (secretBytes.length === 64) {
-    const seed = secretBytes.slice(0, 32);
-    const pub = secretBytes.slice(32, 64);
+    const seed = secretBytes.subarray(0, 32);
+    const pub = secretBytes.subarray(32, 64);
     return crypto.createPrivateKey({
       key: { kty: 'OKP', crv: 'Ed25519', x: coinbaseBase64url(pub), d: coinbaseBase64url(seed) },
       format: 'jwk',
@@ -434,43 +443,68 @@ function wrapEcPrivateKeyPem(privateKeyBytes) {
   return Buffer.concat([Buffer.from([0x30, content.length]), content]);
 }
 
+function derEcdsaSignatureToJose(derSig, size = 32) {
+  const der = Buffer.isBuffer(derSig) ? derSig : Buffer.from(derSig);
+  if (der.length === size * 2) return der;
+  let offset = 0;
+  if (der[offset++] !== 0x30) throw new Error('ECDSA signature is not DER');
+  let seqLen = der[offset++];
+  if (seqLen & 0x80) {
+    const nbytes = seqLen & 0x7f;
+    seqLen = 0;
+    for (let i = 0; i < nbytes; i++) seqLen = (seqLen << 8) | der[offset++];
+  }
+  const readInt = () => {
+    if (der[offset++] !== 0x02) throw new Error('ECDSA signature missing integer');
+    let len = der[offset++];
+    if (len & 0x80) {
+      const nbytes = len & 0x7f;
+      len = 0;
+      for (let i = 0; i < nbytes; i++) len = (len << 8) | der[offset++];
+    }
+    let bytes = der.subarray(offset, offset + len);
+    offset += len;
+    if (bytes.length && bytes[0] === 0x00) bytes = bytes.subarray(1);
+    if (bytes.length > size) bytes = bytes.subarray(bytes.length - size);
+    if (bytes.length < size) {
+      const padded = Buffer.alloc(size);
+      bytes.copy(padded, size - bytes.length);
+      return padded;
+    }
+    return Buffer.from(bytes);
+  };
+  return Buffer.concat([readInt(), readInt()]);
+}
+
 async function buildCoinbaseJwt(apiKey, secretKey, method, requestPath, baseUrl) {
   const secret = String(secretKey || '').trim();
   if (!secret) return null;
 
   const key = importCoinbaseSecret(secret);
-  const raw = secret.replace(/\s+/g, '');
-  const decodedLength = Buffer.from(raw, 'base64').length;
-  const isEd25519 = decodedLength === 64;
-
+  const alg = key.asymmetricKeyType === 'ed25519' ? 'EdDSA' : 'ES256';
   const now = Math.floor(Date.now() / 1000);
   const host = String(baseUrl || 'https://api.coinbase.com').replace(/^https?:\/\//, '').replace(/\/$/, '');
-  const uri = `${method.toUpperCase()} ${host}${requestPath}`;
+  const uri = `${String(method || 'GET').toUpperCase()} ${host}${requestPath}`;
   const header = {
-    alg: isEd25519 ? 'EdDSA' : 'ES256',
+    alg,
     typ: 'JWT',
     kid: apiKey,
+    nonce: crypto.randomBytes(16).toString('hex'),
   };
   const payload = {
     sub: apiKey,
     iss: 'cdp',
-    aud: 'cdp_service',
-    exp: now + 120,
     nbf: now,
+    exp: now + 120,
     uri,
   };
 
   const encodedHeader = coinbaseBase64url(JSON.stringify(header));
   const encodedPayload = coinbaseBase64url(JSON.stringify(payload));
   const signingInput = `${encodedHeader}.${encodedPayload}`;
-
-  const signature = crypto.sign(
-    isEd25519 ? 'Ed25519' : undefined,
-    Buffer.from(signingInput),
-    key
-  );
-
-  const encodedSignature = signature.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const signature = crypto.sign(null, Buffer.from(signingInput), key);
+  const joseSig = alg === 'EdDSA' ? signature : derEcdsaSignatureToJose(signature, 32);
+  const encodedSignature = joseSig.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   return `${signingInput}.${encodedSignature}`;
 }
 
@@ -511,7 +545,12 @@ async function testCoinbaseCredentials(credentials) {
   }
 
   const pathStr = '/api/v3/brokerage/accounts';
-  const jwt = await buildCoinbaseJwt(apiKey, secretKey, 'GET', pathStr, baseUrl);
+  let jwt;
+  try {
+    jwt = await buildCoinbaseJwt(apiKey, secretKey, 'GET', pathStr, baseUrl);
+  } catch (e) {
+    return { ok: false, error: e.message || 'Failed to build Coinbase JWT.' };
+  }
   if (!jwt) {
     return { ok: false, error: 'Failed to build Coinbase JWT.' };
   }
@@ -542,10 +581,152 @@ async function testCoinbaseCredentials(credentials) {
       return { ok: false, error: msg, status };
     }
 
-    appendLog(`✅ Coinbase test passed (${modeLabel})`, 'success');
-    return { ok: true, status, data: parsedBody };
+    const accounts = Array.isArray(parsedBody?.accounts) ? parsedBody.accounts : [];
+    const summary = summarizeCoinbaseAccounts(accounts);
+    appendLog(`✅ Coinbase test passed (${modeLabel}) — ${summary}`, 'success');
+    return { ok: true, mode: modeLabel, summary, status, data: parsedBody, accounts };
   } catch (e) {
     appendLog(`✗ Coinbase test error: ${e.message}`, 'error');
+    return { ok: false, error: e.message };
+  }
+}
+
+function coinbaseNumber(value) {
+  if (value && typeof value === 'object') return coinbaseNumber(value.value);
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function summarizeCoinbaseAccounts(accounts) {
+  const list = Array.isArray(accounts) ? accounts : [];
+  let usd = 0;
+  let usdc = 0;
+  for (const account of list) {
+    const currency = String(account.currency || account.available_balance?.currency || '').toUpperCase();
+    const available = coinbaseNumber(account.available_balance ?? account.available);
+    if (currency === 'USD') usd += available;
+    if (currency === 'USDC') usdc += available;
+  }
+  if (!list.length) return 'authenticated, no accounts returned';
+  if (usdc > 0 || usd > 0) {
+    const currency = usdc >= usd ? 'USDC' : 'USD';
+    const shown = usdc >= usd ? usdc : usd;
+    return `${list.length} accounts, ${shown.toFixed(2)} ${currency} available`;
+  }
+  return `${list.length} accounts, authenticated`;
+}
+
+function coinbaseAccountRows(accounts) {
+  return (Array.isArray(accounts) ? accounts : []).map((account) => {
+    const currency = String(account.currency || account.available_balance?.currency || '').toUpperCase();
+    const available = coinbaseNumber(account.available_balance ?? account.available);
+    return { currency, available, availableBalance: available, availableEquity: available };
+  }).filter((row) => row.currency);
+}
+
+function equityFromCoinbaseBody(body) {
+  if (!body || typeof body !== 'object') return 0;
+  const candidates = [
+    body.total_balance,
+    body.portfolio_value,
+    body.equity,
+    body.collateral,
+    body.available_balance,
+    body.buying_power,
+    body.total_usd_balance,
+  ];
+  let best = 0;
+  for (const candidate of candidates) {
+    best = Math.max(best, coinbaseNumber(candidate));
+  }
+  return best;
+}
+
+async function coinbaseAuthedGet(requestPath, credentials, options = {}) {
+  const creds = credentials || storeData.coinbase || {};
+  const apiKey = String(creds.apiKey || '').trim();
+  const secretKey = String(creds.secretKey || '').trim();
+  if (!apiKey || !secretKey) return { ok: false, error: 'API key and private key are required.' };
+  const jwt = await buildCoinbaseJwt(apiKey, secretKey, 'GET', requestPath, COINBASE_API_URL);
+  if (!jwt) return { ok: false, error: 'Failed to build Coinbase JWT.' };
+  const { status, raw } = await httpsRequest(`${COINBASE_API_URL}${requestPath}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${jwt}` },
+  });
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { parsed = null; }
+  if (!String(status || '').startsWith('2')) {
+    const msg = parsed?.message || parsed?.error || String(raw || '').slice(0, 180) || `HTTP ${status}`;
+    if (!options.quiet) appendLog(`Coinbase ${requestPath} status=${status}`, 'warn');
+    return { ok: false, status, error: msg, data: parsed };
+  }
+  return { ok: true, status, data: parsed };
+}
+
+async function fetchLiveCoinbaseAccount(options = {}) {
+  const creds = storeData.coinbase || {};
+  if (!String(creds.apiKey || '').trim() || !String(creds.secretKey || '').trim()) return null;
+  try {
+    const accountsRes = await coinbaseAuthedGet('/api/v3/brokerage/accounts', creds, { quiet: true });
+    if (!accountsRes.ok) return { ok: false, error: accountsRes.error };
+    const accounts = Array.isArray(accountsRes.data?.accounts) ? accountsRes.data.accounts : [];
+    const rows = coinbaseAccountRows(accounts);
+    let cash = 0;
+    for (const row of rows) {
+      if (row.currency === 'USD' || row.currency === 'USDC') cash += row.available;
+    }
+    let perpEquity = 0;
+    for (const pathStr of [
+      '/api/v3/brokerage/perpetuals/get-perpetuals-portfolio-summary',
+      '/api/v3/brokerage/cfm/balance_summary',
+    ]) {
+      try {
+        const perp = await coinbaseAuthedGet(pathStr, creds, { quiet: true });
+        if (perp.ok) perpEquity = Math.max(perpEquity, equityFromCoinbaseBody(perp.data));
+      } catch {}
+    }
+    const totalEquity = Math.max(cash, perpEquity);
+    return {
+      ok: true,
+      totalEquity,
+      totalAvailable: cash || perpEquity,
+      accountRows: rows,
+      fetchedAt: Date.now(),
+    };
+  } catch (e) {
+    if (!options.quiet) appendLog(`Coinbase live account: ${e.message}`, 'warn');
+    return null;
+  }
+}
+
+async function testNousCredentials({ apiKey, model }) {
+  const key = String(apiKey || '').trim();
+  const modelId = normalizeNousModel(model);
+  if (!key) return { ok: false, error: 'API key is required.' };
+  try {
+    const { status, raw } = await httpsRequest(NOUS_INFERENCE_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelId,
+        messages: [{ role: 'user', content: 'Reply with the word OK.' }],
+        max_tokens: 16,
+      }),
+    });
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch { parsed = null; }
+    if (status === 401 || status === 403) {
+      return { ok: false, error: parsed?.error?.message || 'Unauthorized' };
+    }
+    if (!String(status || '').startsWith('2')) {
+      return { ok: false, error: parsed?.error?.message || parsed?.message || `HTTP ${status}` };
+    }
+    const reply = String(parsed?.choices?.[0]?.message?.content || '').trim();
+    return { ok: true, model: modelId, reply: reply.slice(0, 80) };
+  } catch (e) {
     return { ok: false, error: e.message };
   }
 }
@@ -1637,23 +1818,34 @@ SUCCESS CRITERIA (live):
 
 function buildCronPrompt() {
   const compPath = getCompendiumPath();
+  const paper = !!storeData.coinbase?.demoMode;
+  const paperStart = Number(storeData.coinbase?.paperStartingValue) || 1000;
+  const ledgerPath = path.join(HERMES_HOME, 'coinbase-paper-ledger.json');
+  const modeBlock = paper
+    ? buildCronPaperTradingBlock(paperStart, ledgerPath)
+    : buildCronLiveTradingBlock();
 
   return `${buildCronLearningHeader()}
 
 MISSION
-Scan and trade the Coinbase account in LIVE mode, targeting perpetual futures for faster but still responsible growth.
-Base URL: ${COINBASE_API_URL}
-You are the trading automation. Take all trades by hand. Zero trading scripts, agents, assistants, and bots are to be used — zero. No order-placing bots, no auto-scanners that submit orders, no "run agent" wrappers that trade for you. You decide, you place, you manage TP/SL, you monitor.
+You are Hermes on a local cron. You are the analyst, the risk manager, and the only process that places trades. Scan Coinbase perpetual futures, decide, place the order yourself, attach TP/SL, and manage the position. Zero order-placing scripts, zero scanners that submit orders, zero "run agent" wrappers.
 
-SCOREBOARD
-Only scoreboard: take and keep the equity curve vertical. With smaller capital, favor more frequent, smaller, high-probability setups — but always with real risk management. Isolated margin only. Longs and shorts both allowed. Sizing: risk 1–2% of equity per trade, protect equity, take real edges when they appear. Hard stop after 3 consecutive losses or 4% max drawdown.
+NUMBER ONE OBJECTIVE
+Protect existing equity and keep the equity curve vertical. Cash is a position. If no setup clears a reward-to-risk of at least 2.5, stay in cash.
+
+OPERATING RULES
+- Transport is plain HTTPS to ${COINBASE_API_URL}. Coinbase does not need a VPN, a browser fingerprint, or a WAF bypass.
+- Isolated margin only. Longs and shorts both allowed. Maximum 2 concurrent positions.
+- Risk 1–2% of equity per trade. Minimum notional is 10 USDC. Reject any setup below 2.5 reward-to-risk.
+- Hard stop: no new entries after 3 consecutive losses or a 4% drawdown from peak equity.
+- Read durable lessons under ${HERMES_HOME} at the start of every tick and write the updated rules back before you finish.
 
 ${buildCronCoinbaseAuthBlock(compPath)}
 
-${buildCronLiveTradingBlock()}
+${modeBlock}
 
 PROCEED NOW
-Confirm credentials → prove JSON account read → ensure USDC in perpetuals portfolio → fetch products → check positions → scan → take righteous trades by hand → manage TP/SL → keep equity curve vertical.
+Confirm credentials from the compendium → prove a JSON account read → size from live equity → scan liquid perpetuals → take the trade by hand only when the edge clears the rules → attach TP/SL → keep the equity curve vertical.
 
 ${buildCronLearningFooter()}`;
 }
@@ -1917,7 +2109,7 @@ ipcMain.handle('write-compendium', async () => {
   }
 });
 ipcMain.handle('get-nous-models', async () => FALLBACK_FREE_NOUS_MODELS);
-ipcMain.handle('test-nous-credentials', async (_e, { apiKey, model }) => ({ ok: true, msg: 'Nous credentials accepted' }));
+ipcMain.handle('test-nous-credentials', async (_e, { apiKey, model }) => testNousCredentials({ apiKey, model }));
 ipcMain.handle('check-hermes', async () => checkHermesInstalled());
 ipcMain.handle('install-hermes', async () => installHermes());
 ipcMain.handle('wipe-hermes', async () => wipeHermesInstall());
@@ -1932,12 +2124,21 @@ ipcMain.handle('open-external', (_e, url) => shell.openExternal(url));
 ipcMain.handle('get-blohunter-preload-path', () => pathToFileURL(path.join(__dirname, 'blohunter-preload.js')).href);
 ipcMain.handle('attach-trading-webview', (_e, webContentsId) => {
   const wc = webContents.fromId(webContentsId);
-  if (wc) getBlohunterBridge().setWebContents(wc);
-  return { ok: !!wc };
+  if (wc && !wc.isDestroyed()) {
+    wc.setBackgroundThrottling(false);
+    getBlohunterBridge().setWebContents(wc);
+  }
+  return { ok: !!wc && !wc.isDestroyed() };
+});
+ipcMain.handle('unthrottle-webview', (_e, webContentsId) => {
+  const wc = webContents.fromId(webContentsId);
+  if (wc && !wc.isDestroyed()) wc.setBackgroundThrottling(false);
+  return { ok: !!wc && !wc.isDestroyed() };
 });
 ipcMain.handle('get-trading-status', () => getBlohunterBridge().getStatus());
 ipcMain.handle('start-trading-dashboard', async () => {
   const bridge = getBlohunterBridge();
+  bridge.setLiveAccountProvider(() => fetchLiveCoinbaseAccount({ quiet: true }));
   const result = await bridge.start({
     apiKey: storeData.coinbase?.apiKey,
     secretKey: storeData.coinbase?.secretKey,
@@ -2053,8 +2254,10 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: false,
       webviewTag: true,
+      backgroundThrottling: false,
     },
   });
+  mainWindow.webContents.setBackgroundThrottling(false);
   mainWindow.center();
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.once('ready-to-show', () => { mainWindow.show(); mainWindow.focus(); });
@@ -2150,8 +2353,13 @@ autoUpdater.on('download-progress', (progress) => {
   });
 });
 autoUpdater.on('update-downloaded', (info) => {
-  appendLog(`⬇ Update ready: ${info.version}`, 'success');
+  appendLog(`⬇ Update ready: ${info.version}. Installing and relaunching…`, 'success');
   broadcastUpdateEvent('update-downloaded', { version: info.version });
+  setTimeout(() => {
+    app.isQuitting = true;
+    try { stopHermesDashboard(); } catch {}
+    autoUpdater.quitAndInstall(false, true);
+  }, 4000);
 });
 autoUpdater.on('error', (err) => {
   appendLog(`⚠ Updater error: ${err?.message || err}`, 'warn');
@@ -2163,11 +2371,47 @@ async function checkForUpdates(silent = true) {
     await autoUpdater.checkForUpdates();
     if (!silent) appendLog('🔎 Manual update check complete.', 'info');
   } catch (err) {
-    appendLog(`⚠ Update check failed: ${err?.message || err}`, 'warn');
+    const message = err?.message || String(err);
+    appendLog(`⚠ Update check failed: ${message}`, 'warn');
+    if (!silent) broadcastUpdateEvent('update-error', { message });
   }
 }
 
+async function autoconnectHermes() {
+  try {
+    const status = await checkHermesInstalled();
+    if (!status?.installed) {
+      appendLog('Hermes is not installed yet. Open Setup, install it, and the dashboard plus cron start on their own.', 'info');
+      return;
+    }
+    appendLog('Autoconnecting Hermes dashboard and gateway…', 'info');
+    const started = await startHermesDashboard();
+    if (started && started.ok === false) {
+      appendLog(`Hermes dashboard did not start: ${started.msg || 'unknown'}`, 'warn');
+      return;
+    }
+    const cron = await configureCron();
+    if (cron?.ok) appendLog('Coinbase cron configured on launch.', 'success');
+    else appendLog(`Cron autoconfig: ${cron?.msg || 'needs setup'}`, 'warn');
+  } catch (e) {
+    appendLog(`Hermes autoconnect: ${e.message}`, 'warn');
+  }
+}
+
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.knighttrader.coinbase');
+}
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    restoreMainWindow();
+  });
+}
+
 app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock) return;
   attachBhProtocol(session.defaultSession);
   attachBhProtocol(session.fromPartition('persist:blohunter-trading'));
 
@@ -2176,7 +2420,9 @@ app.whenReady().then(async () => {
   const bhRoot = getBlohunterBridge().getConnectRoot();
   if (bhRoot) appendLog(`📈 BloHunter Connect: ${bhRoot}`, 'info');
   else appendLog('⚠ BloHunter Connect not found — Trading tab needs Downloads\\blohunter-connect', 'warn');
+  getBlohunterBridge().setLiveAccountProvider(() => fetchLiveCoinbaseAccount({ quiet: true }));
 
+  autoconnectHermes();
   await checkForUpdates(true);
   const updateInterval = setInterval(() => checkForUpdates(true), 5 * 60 * 1000);
   app.on('quit', () => clearInterval(updateInterval));
@@ -2187,6 +2433,10 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  if (!gotSingleInstanceLock) {
+    app.quit();
+    return;
+  }
   if (process.platform !== 'darwin' && !appTray) app.quit();
 });
 
@@ -2196,7 +2446,7 @@ ipcMain.handle('install-update-now', async () => {
   setImmediate(() => {
     app.isQuitting = true;
     stopHermesDashboard();
-    autoUpdater.quitAndInstall();
+    autoUpdater.quitAndInstall(false, true);
   });
   return { ok: true };
 });

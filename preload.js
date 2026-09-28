@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('kt', {
   // Trading / BloHunter desk
   getBlohunterPreloadPath: () => ipcRenderer.invoke('get-blohunter-preload-path'),
   attachTradingWebview: (webContentsId) => ipcRenderer.invoke('attach-trading-webview', webContentsId),
+  unthrottleWebview: (webContentsId) => ipcRenderer.invoke('unthrottle-webview', webContentsId),
   startTradingDashboard: () => ipcRenderer.invoke('start-trading-dashboard'),
   stopTradingDashboard: () => ipcRenderer.invoke('stop-trading-dashboard'),
   getTradingStatus: () => ipcRenderer.invoke('get-trading-status'),

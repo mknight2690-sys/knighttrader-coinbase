@@ -492,6 +492,9 @@ function attachTradingGuest(webview) {
   try {
     const wcId = webview.getWebContentsId();
     window.kt.attachTradingWebview(wcId).catch((e) => console.warn('attachTradingWebview:', e));
+    if (window.kt.unthrottleWebview) {
+      window.kt.unthrottleWebview(wcId).catch(() => {});
+    }
   } catch (e) {
     console.warn('attachTradingWebview:', e);
   }
@@ -1002,10 +1005,11 @@ window.kt.onUpdateStatus((payload) => {
     showUpdateBanner('Downloading update…', `${percent}% • ${speed} B/s`, false);
   } else if (type === 'update-downloaded') {
     const version = String(detail?.version || '');
-    showUpdateBanner(`Update ready: ${version}`, 'Restart to install', true);
+    showUpdateBanner(`Update ready: ${version}`, 'Installing and relaunching…', true);
     if (btnCheckUpdates) btnCheckUpdates.disabled = true;
   } else if (type === 'update-error') {
-    hideUpdateBanner();
+    const message = String(detail?.message || 'Update check failed');
+    showUpdateBanner('Update check failed', message, false);
     if (btnCheckUpdates) btnCheckUpdates.disabled = false;
   }
 });
