@@ -367,7 +367,8 @@ html, body {
 }
 
 .ai-icon { background: rgba(88,166,255,0.12); border-color: rgba(88,166,255,0.3); color: var(--blue); }
-.coinbase-icon { background: rgba(0,82,204,0.12); border-color: rgba(0,82,204,0.3); color: #0052cc; }
+.propr-icon { background: rgba(124,58,237,0.12); border-color: rgba(124,58,237,0.3); color: #a78bfa; }
+.coinbase-icon { background: rgba(124,58,237,0.12); border-color: rgba(124,58,237,0.3); color: #a78bfa; }
 .hermes-icon { background: rgba(61,214,140,0.12); border-color: rgba(61,214,140,0.3); color: var(--good); }
 
 .card-title { font-size: 13px; font-weight: 600; color: var(--text); }

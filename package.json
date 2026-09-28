@@ -1,7 +1,7 @@
 {
-  "name": "knight-trader-coinbase",
-  "version": "1.1.4",
-  "description": "KnightTrader Coinbase — Hermes credential manager & launcher",
+  "name": "knight-trader-propr",
+  "version": "2.0.0",
+  "description": "KnightTrader Propr — Hermes credential manager & launcher",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -11,8 +11,8 @@
     "build:mac": "electron-builder --mac --publish always"
   },
   "build": {
-    "appId": "com.knighttrader.coinbase",
-    "productName": "KnightTrader Coinbase",
+    "appId": "com.knighttrader.propr",
+    "productName": "KnightTrader Propr",
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"
@@ -48,7 +48,7 @@
     "electron",
     "trading",
     "hermes",
-    "coinbase"
+    "propr"
   ],
   "author": "KnightTrader",
   "license": "MIT",

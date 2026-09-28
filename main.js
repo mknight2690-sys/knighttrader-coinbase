@@ -4,6 +4,11 @@ const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { BlohunterBridge } = require('./blohunter-bridge');
+const {
+  fetchLiveProprAccount: fetchLiveProprFromLib,
+  testProprCredentials: testProprFromLib,
+  PROPR_API_URL,
+} = require('./lib/propr-api');
 const { spawn, execFileSync } = require('child_process');
 const crypto = require('crypto');
 const http = require('http');
@@ -23,7 +28,7 @@ const NOUS_RECOMMENDED_MODELS_URL = 'https://portal.nousresearch.com/api/nous/re
 const DASHBOARD_PORT = 9130;
 const DASHBOARD_URL = `http://127.0.0.1:${DASHBOARD_PORT}`;
 
-const HERMES_HOME    = path.join(app.getPath('userData'), 'hermes-coinbase');
+const HERMES_HOME    = path.join(app.getPath('userData'), 'hermes-propr');
 const HERMES_INSTALL = path.join(HERMES_HOME, 'hermes-agent');
 const HERMES_EXE     = path.join(HERMES_INSTALL, 'venv', 'Scripts', 'hermes.exe');
 
@@ -44,7 +49,7 @@ function decryptData(raw) {
   } catch { return null; }
 }
 
-const COINBASE_API_URL = 'https://api.coinbase.com';
+const PROPR_REST_URL = PROPR_API_URL;
 
 const DEFAULT_NOUS_MODEL = 'tencent/hy3:free';
 
@@ -69,7 +74,7 @@ const FALLBACK_PAID_NOUS_MODELS = [
 ];
 
 const DEFAULTS = {
-  coinbase: { apiKey: '', secretKey: '', passphrase: '' },
+  propr: { apiKey: '', accountId: '' },
   nous: { apiKey: '', model: DEFAULT_NOUS_MODEL },
   settings: { notifySounds: true },
 };
@@ -94,6 +99,18 @@ function normalizeNousModel(value) {
 
 function migrateStoreData(raw) {
   const merged = { ...DEFAULTS, ...raw };
+  if (merged.coinbase?.apiKey && !merged.propr?.apiKey) {
+    merged.propr = {
+      apiKey: String(merged.coinbase.apiKey || '').trim(),
+      accountId: String(merged.propr?.accountId || '').trim(),
+    };
+  }
+  if (!merged.propr) merged.propr = { apiKey: '', accountId: '' };
+  merged.propr = {
+    apiKey: String(merged.propr.apiKey || '').trim(),
+    accountId: String(merged.propr.accountId || '').trim(),
+  };
+  delete merged.coinbase;
   if (merged.nous) {
     merged.nous = {
       apiKey: merged.nous.apiKey || '',
@@ -121,11 +138,11 @@ function getBlohunterBridge() {
 
 async function syncBlohunterCredentials() {
   const bridge = getBlohunterBridge();
-  if (!storeData.coinbase?.apiKey) return;
+  if (!storeData.propr?.apiKey) return;
   await bridge.syncCredentials({
-    apiKey: storeData.coinbase.apiKey,
-    secretKey: storeData.coinbase.secretKey,
-    passphrase: storeData.coinbase.passphrase || '',
+    apiKey: storeData.propr.apiKey,
+    secretKey: 'propr',
+    passphrase: 'propr',
   });
 }
 
@@ -193,26 +210,24 @@ function applyCredentialMapping(target, kv) {
       set('nous', 'apiKey', value);
     } else if (key === 'nous_model' || key === 'nouse_model') {
       set('nous', 'model', normalizeNousModel(value));
-    } else if (key === 'api_key' || key === 'coinbase_api_key' || key === 'api_key_name') set('coinbase', 'apiKey', value);
-    else if (key === 'api_secret' || key === 'secret_key' || key === 'coinbase_secret_key' || key === 'private_key') set('coinbase', 'secretKey', value);
-    else if (key === 'passphrase' || key === 'coinbase_passphrase') set('coinbase', 'passphrase', value);
+    } else if (key === 'propr_api_key' || key === 'api_key' || key === 'x_api_key') set('propr', 'apiKey', value);
+    else if (key === 'propr_account_id' || key === 'account_id') set('propr', 'accountId', value);
   }
 }
 
 function finalizeNousCredentials(parsed, text) {
-  if (parsed.nous.apiKey) return;
-
-  const hasCoinbase = !!(parsed.coinbase.apiKey || parsed.coinbase.secretKey || parsed.coinbase.passphrase);
-  if (!hasCoinbase && parsed.coinbase.apiKey) {
-    parsed.nous.apiKey = parsed.coinbase.apiKey;
-    parsed.coinbase.apiKey = '';
-  }
-
   const lines = String(text || '')
     .replace(/^\uFEFF/, '')
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith('#'));
+
+  if (!parsed.propr.apiKey) {
+    const pkLine = lines.find((line) => /^pk_live_/i.test(line));
+    if (pkLine) parsed.propr.apiKey = pkLine.trim();
+  }
+
+  if (parsed.nous.apiKey) return;
 
   for (const line of lines) {
     const labeled = line.match(/^(?:nous\s*)?(?:portal\s*)?api\s*key[^:=]*[:=]\s*(.+)$/i);
@@ -223,17 +238,20 @@ function finalizeNousCredentials(parsed, text) {
   }
 
   const rawLines = lines.filter((line) => !/[:=]/.test(line));
-  if (rawLines.length === 1 && looksLikeApiKey(rawLines[0])) {
-    parsed.nous.apiKey = rawLines[0];
-    return;
+  for (const line of rawLines) {
+    if (/^pk_live_/i.test(line)) continue;
+    if (looksLikeApiKey(line)) {
+      parsed.nous.apiKey = line;
+      return;
+    }
   }
 
   if (lines.length === 1) {
     const parts = lines[0].split(/[:=]/);
     if (parts.length >= 2) {
       const candidate = stripCredentialValue(parts.slice(1).join('='));
-      if (looksLikeApiKey(candidate)) parsed.nous.apiKey = candidate;
-    } else if (looksLikeApiKey(lines[0])) {
+      if (looksLikeApiKey(candidate) && !/^pk_live_/i.test(candidate)) parsed.nous.apiKey = candidate;
+    } else if (looksLikeApiKey(lines[0]) && !/^pk_live_/i.test(lines[0])) {
       parsed.nous.apiKey = lines[0];
     }
   }
@@ -249,17 +267,19 @@ function mergeCredentialObjects(target, source) {
     if (source.nouse.apiKey) target.nous.apiKey = String(source.nouse.apiKey).trim();
     if (source.nouse.model) target.nous.model = normalizeNousModel(source.nouse.model);
   }
-  if (source.coinbase && typeof source.coinbase === 'object') {
-    if (source.coinbase.apiKey) target.coinbase.apiKey = String(source.coinbase.apiKey).trim();
-    if (source.coinbase.secretKey) target.coinbase.secretKey = String(source.coinbase.secretKey).trim();
-    if (source.coinbase.passphrase) target.coinbase.passphrase = String(source.coinbase.passphrase).trim();
+  if (source.propr && typeof source.propr === 'object') {
+    if (source.propr.apiKey) target.propr.apiKey = String(source.propr.apiKey).trim();
+    if (source.propr.accountId) target.propr.accountId = String(source.propr.accountId).trim();
+  }
+  if (source.coinbase?.apiKey && !target.propr.apiKey) {
+    target.propr.apiKey = String(source.coinbase.apiKey).trim();
   }
 }
 
 function parseCredentialFileContent(content) {
   const parsed = {
     nous: { apiKey: '', model: '' },
-    coinbase: { apiKey: '', secretKey: '', passphrase: '' },
+    propr: { apiKey: '', accountId: '' },
   };
   const text = String(content || '').trim();
   if (!text) return parsed;
@@ -267,7 +287,7 @@ function parseCredentialFileContent(content) {
   if (text.startsWith('{') || text.startsWith('[')) {
     try {
       mergeCredentialObjects(parsed, JSON.parse(text));
-      if (parsed.nous.apiKey || parsed.nous.model || parsed.coinbase.apiKey) return parsed;
+      if (parsed.nous.apiKey || parsed.nous.model || parsed.propr.apiKey) return parsed;
     } catch {}
   }
 
@@ -294,12 +314,12 @@ function getNousCredentialDefaultPath() {
 }
 
 async function pickCredentialFile(kind) {
-  const defaultPath = kind === 'coinbase'
-    ? getCompendiumPath()
+  const defaultPath = kind === 'propr'
+    ? path.join(os.homedir(), 'OneDrive', 'Documents', 'Propr API Key.txt')
     : getNousCredentialDefaultPath();
 
   const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
-    title: kind === 'coinbase' ? 'Select Coinbase credentials file' : 'Select Nous Portal credentials file',
+    title: kind === 'propr' ? 'Select Propr API key file' : 'Select Nous Portal credentials file',
     defaultPath: fs.existsSync(defaultPath) ? defaultPath : path.dirname(defaultPath),
     properties: ['openFile'],
     filters: [
@@ -326,27 +346,25 @@ async function pickCredentialFile(kind) {
       return { ok: true, path: filePath, nous };
     }
 
-    const coinbase = {
-      apiKey: parsed.coinbase.apiKey || '',
-      secretKey: parsed.coinbase.secretKey || '',
-      passphrase: parsed.coinbase.passphrase || '',
+    const propr = {
+      apiKey: parsed.propr.apiKey || '',
+      accountId: parsed.propr.accountId || '',
     };
-    if (!coinbase.apiKey || !coinbase.secretKey) {
-      return { ok: false, error: 'API Key Name / Private Key not found in that file.', path: filePath };
+    if (!propr.apiKey) {
+      return { ok: false, error: 'Propr API key (pk_live_…) not found in that file.', path: filePath };
     }
-    appendLog(`📂 Loaded Coinbase credentials from ${filePath}`, 'success');
-    return { ok: true, path: filePath, coinbase };
+    appendLog(`📂 Loaded Propr credentials from ${filePath}`, 'success');
+    return { ok: true, path: filePath, propr };
   } catch (e) {
     return { ok: false, error: `Failed to read credential file: ${e.message}`, path: filePath };
   }
 }
 
-function saveCredentials({ coinbase, nous }) {
-  if (coinbase) {
-    storeData.coinbase = {
-      apiKey: String(coinbase.apiKey || storeData.coinbase.apiKey || '').trim(),
-      secretKey: String(coinbase.secretKey || storeData.coinbase.secretKey || '').trim(),
-      passphrase: String(coinbase.passphrase || storeData.coinbase.passphrase || '').trim(),
+function saveCredentials({ propr, nous }) {
+  if (propr) {
+    storeData.propr = {
+      apiKey: String(propr.apiKey || storeData.propr.apiKey || '').trim(),
+      accountId: String(propr.accountId || storeData.propr.accountId || '').trim(),
     };
   }
   if (nous) {
@@ -361,33 +379,26 @@ function saveCredentials({ coinbase, nous }) {
 
 function getCompendiumPath() {
   const base = app.getPath('userData');
-  return path.join(base, 'coinbase-credentials.txt');
+  return path.join(base, 'propr-credentials.txt');
 }
 
-function writeCompendiumFile(coinbase) {
+function writeCompendiumFile(propr) {
   const compPath = getCompendiumPath();
   const lines = [
-    `# Coinbase Advanced Trade CDP API credentials`,
-    `# Auto-generated by KnightTrader`,
+    `# Propr trading API credentials`,
+    `# Auto-generated by KnightTrader Propr`,
     ``,
-    `API Key Name: ${coinbase.apiKey}`,
+    `Propr API Key: ${propr.apiKey}`,
   ];
-  if (coinbase.passphrase) {
-    lines.push(`Passphrase: ${coinbase.passphrase}`);
+  if (propr.accountId) {
+    lines.push(`Account ID: ${propr.accountId}`);
   }
-  lines.push(`Private Key: ${coinbase.secretKey}`);
   fs.writeFileSync(compPath, lines.join('\n') + '\n', 'utf8');
   return compPath;
 }
 
-function getCoinbaseBaseUrl() {
-  // Coinbase has no separate demo perpetuals API — always use live REST for auth and market data.
-  return COINBASE_API_URL;
-}
-
-function normalizeNousModel(value) {
-  const v = String(value || '').trim();
-  return LEGACY_NOUS_MODELS[v] || v || DEFAULT_NOUS_MODEL;
+function getProprBaseUrl() {
+  return PROPR_REST_URL;
 }
 
 function appendLog(message, level = 'info') {
@@ -686,40 +697,39 @@ async function coinbaseAuthedGet(requestPath, credentials, options = {}) {
   return { ok: true, status, data: parsed };
 }
 
-async function fetchLiveCoinbaseAccount(options = {}) {
-  const creds = storeData.coinbase || {};
-  if (!String(creds.apiKey || '').trim() || !String(creds.secretKey || '').trim()) return null;
+async function fetchLiveProprAccount(options = {}) {
+  const creds = storeData.propr || {};
+  if (!String(creds.apiKey || '').trim()) return null;
   try {
-    const accountsRes = await coinbaseAuthedGet('/api/v3/brokerage/accounts', creds, { quiet: true });
-    if (!accountsRes.ok) return { ok: false, error: accountsRes.error };
-    const accounts = Array.isArray(accountsRes.data?.accounts) ? accountsRes.data.accounts : [];
-    const rows = coinbaseAccountRows(accounts);
-    let cash = 0;
-    for (const row of rows) {
-      if (row.currency === 'USD' || row.currency === 'USDC') cash += row.available;
+    const live = await fetchLiveProprFromLib(creds, options);
+    if (live?.ok && live.accountId && live.accountId !== creds.accountId) {
+      storeData.propr.accountId = live.accountId;
+      saveStore(storeData);
     }
-    let perpEquity = 0;
-    for (const pathStr of [
-      '/api/v3/brokerage/perpetuals/get-perpetuals-portfolio-summary',
-      '/api/v3/brokerage/cfm/balance_summary',
-    ]) {
-      try {
-        const perp = await coinbaseAuthedGet(pathStr, creds, { quiet: true });
-        if (perp.ok) perpEquity = Math.max(perpEquity, equityFromCoinbaseBody(perp.data));
-      } catch {}
-    }
-    const totalEquity = Math.max(cash, perpEquity);
-    return {
-      ok: true,
-      totalEquity,
-      totalAvailable: cash || perpEquity,
-      accountRows: rows,
-      fetchedAt: Date.now(),
-    };
+    return live;
   } catch (e) {
-    if (!options.quiet) appendLog(`Coinbase live account: ${e.message}`, 'warn');
+    if (!options.quiet) appendLog(`Propr live account: ${e.message}`, 'warn');
     return null;
   }
+}
+
+async function testProprCredentials(credentials) {
+  const creds = credentials || storeData.propr || {};
+  appendLog('🧪 Testing Propr credentials…', 'info');
+  const result = await testProprFromLib(creds);
+  if (result.ok) {
+    if (result.accountId) {
+      storeData.propr = {
+        apiKey: String(creds.apiKey || storeData.propr?.apiKey || '').trim(),
+        accountId: result.accountId,
+      };
+      saveStore(storeData);
+    }
+    appendLog(`✅ Propr test passed — ${result.summary || 'connected'}`, 'success');
+  } else {
+    appendLog(`✗ Propr test error: ${result.error}`, 'error');
+  }
+  return result;
 }
 
 function testNousCredentials(apiKey, model) {
@@ -862,7 +872,7 @@ function pingNousModel(apiKey, model, timeoutMs = 25000) {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${key}`,
         'Content-Length': Buffer.byteLength(body),
-        'User-Agent': 'KnightTrader-Coinbase/1.0',
+        'User-Agent': 'KnightTrader-Propr/2.0',
       },
       timeout: timeoutMs,
     }, (res) => {
@@ -909,14 +919,14 @@ async function updateCronModelOnly(model) {
   if (list.status !== 200 || !Array.isArray(list.body)) {
     return { ok: false, msg: `list failed (${list.status})` };
   }
-  const existing = list.body.find((job) => job.name === 'coinbase-perp-trading');
+  const existing = list.body.find((job) => job.name === 'propr-perp-trading');
   if (!existing?.id) {
     appendLog('ℹ Cron job not found yet — model will be used when cron is configured.', 'info');
     return { ok: false, msg: 'no-existing-job' };
   }
   const existingPrompt = existing.prompt || existing.spec?.prompt || null;
   const updates = {
-    name: 'coinbase-perp-trading',
+    name: 'propr-perp-trading',
     provider: 'custom',
     base_url: NOUS_INFERENCE_BASE,
     model: mdl,
@@ -1202,10 +1212,9 @@ async function syncHermesCredentials(token, { restartGateway = false } = {}) {
   let after = upsertEnvVar(before, 'NOUS_API_KEY', nousKey);
   after = upsertEnvVar(after, 'NOUSRESEARCH_API_KEY', nousKey);
 
-  // Write Coinbase credentials to .env so Hermes gateway can authenticate
-  const coinbase = storeData.coinbase || {};
-  if (coinbase.apiKey) after = upsertEnvVar(after, 'COINBASE_API_KEY_NAME', coinbase.apiKey);
-  if (coinbase.secretKey) after = upsertEnvVar(after, 'COINBASE_PRIVATE_KEY', coinbase.secretKey);
+  const propr = storeData.propr || {};
+  if (propr.apiKey) after = upsertEnvVar(after, 'PROPR_API_KEY', propr.apiKey);
+  if (propr.accountId) after = upsertEnvVar(after, 'PROPR_ACCOUNT_ID', propr.accountId);
 
   if (after !== before) {
     fs.writeFileSync(envPath, after, 'utf8');
@@ -1218,8 +1227,8 @@ async function syncHermesCredentials(token, { restartGateway = false } = {}) {
     const envVars = {
       NOUS_API_KEY: nousKey,
       NOUSRESEARCH_API_KEY: nousKey,
-      ...(coinbase.apiKey ? { COINBASE_API_KEY_NAME: coinbase.apiKey } : {}),
-      ...(coinbase.secretKey ? { COINBASE_PRIVATE_KEY: coinbase.secretKey } : {}),
+      ...(propr.apiKey ? { PROPR_API_KEY: propr.apiKey } : {}),
+      ...(propr.accountId ? { PROPR_ACCOUNT_ID: propr.accountId } : {}),
     };
     for (const [keyName, value] of Object.entries(envVars)) {
       try {
@@ -1981,34 +1990,30 @@ Next tick must be able to load and use those updated lessons with no chat histor
 If nothing material changed, still append a one-line "hold / no edge" note with timestamp.`;
 }
 
-function buildCronCoinbaseAuthBlock(compPath) {
-  return `--- COINBASE PERPETUAL FUTURES — AUTH & API ---
+function buildCronProprAuthBlock(compPath) {
+  const accountId = storeData.propr?.accountId || '<resolve via GET /challenge-attempts?status=active>';
+  return `--- PROPR PERPETUAL FUTURES — AUTH & API ---
 CREDENTIALS
 Use exactly: ${compPath}
-These are Coinbase Advanced Trade CDP API credentials in API Key Name / Private Key format.
-Confirm which key is loaded before first private call.
-All private REST calls use LIVE base URL: ${COINBASE_API_URL}
-Do NOT use api-public.sandbox.coinbase.com — Coinbase has no demo perpetuals account.
+Propr API keys start with pk_live_. Generate at app.propr.xyz/settings.
+All private REST calls use base URL: ${PROPR_REST_URL}
+Header on every request: X-API-Key: <pk_live_...>
+No VPN, browser fingerprint, or WAF bypass required — plain HTTPS only.
 
-Auth: Coinbase Advanced Trade uses CDP API keys. JWT auth is required for private REST calls.
-- Header: Authorization: Bearer <cdp_jwt>
-- JWT claims: iss=cdp, sub=<API Key Name>, aud=cdp_service, exp <= 120s, nbf=now, uri=<METHOD> <HOST><PATH>, kid=<API Key Name>, nonce=<random>, alg=EdDSA or ES256 depending on key type.
-- For this account: use the provided Private Key. If it decodes to 64 bytes, it is Ed25519; use EdDSA. If it is PEM EC, use ES256.
+RESOLVE ACCOUNT
+GET /challenge-attempts?status=active → read accountId from active attempt
+Cached accountId for this install: ${accountId}
 
 KEY ENDPOINTS
-GET  /api/v3/brokerage/accounts                       — all balances
-GET  /api/v3/brokerage/transaction_summary            — fee tier (maker/taker rates)
-POST /api/v3/brokerage/portfolios/move-portfolios-funds — transfer USDC into perpetuals portfolio
-GET  /api/v3/brokerage/products?product_type=PERPETUAL — perpetual futures products
-GET  /api/v3/brokerage/products/{product_id}          — tick size, min size, leverage, price
-POST /api/v3/brokerage/orders/preview                  — preview order (safe auth-path check)
-POST /api/v3/brokerage/orders                          — place order (LIVE MODE ONLY)
-GET  /api/v3/brokerage/perpetuals/get-perpetuals-portfolio-summary
-GET  /api/v3/brokerage/perpetuals/list-perpetuals-positions
+GET  /users/me                                          — verify API key
+GET  /accounts/{accountId}                              — balance, margin, equity
+GET  /accounts/{accountId}/positions?status=open        — open positions
+GET  /accounts/{accountId}/positions?status=closed      — closed positions
+GET  /accounts/{accountId}/trades                       — trade history
+POST /accounts/{accountId}/orders                       — place order (LIVE MODE ONLY)
 
-Minimum notional: perpetual orders require >= 10 USDC notional value.
-Symbology: discover instruments via GET /api/v3/brokerage/products?product_type=PERPETUAL.
-TP/SL: use attached_order_configuration with trigger_bracket_gtc or separate exit orders.`;
+Minimum notional and symbol rules: read product metadata from Propr docs before placing orders.
+TP/SL: attach stop/take-profit per Propr order schema when placing entries.`;
 }
 
 function buildCronPaperTradingBlock(paperStartingValue, ledgerPath) {
@@ -2073,49 +2078,42 @@ SUCCESS CRITERIA (paper mode):
 
 function buildCronLiveTradingBlock() {
   return `--- LIVE TRADING MODE (ACTIVE) ---
-You place REAL orders on Coinbase perpetual futures via POST /api/v3/brokerage/orders.
-Use live account equity from GET /api/v3/brokerage/accounts and perpetuals portfolio summary for sizing — not the paper ledger.
+You place REAL orders on Propr-funded perpetual futures via POST /accounts/{accountId}/orders.
+Use live account equity from GET /accounts/{accountId} for sizing.
 
 TRADING FLOW
-1. Prove auth with GET /api/v3/brokerage/accounts.
-2. Confirm USDC in perpetuals portfolio; move funds if needed.
-3. GET /api/v3/brokerage/products?product_type=PERPETUAL → pick 5–8 liquid pairs.
-4. Check open perpetual positions; max 2 concurrent. Avoid overexposure.
-5. Scan for momentum/structure/volume confluence. Enter only when 2+ factors align.
-6. Size for >= 10 USDC notional and 1–2% risk. Attach TP/SL immediately.
-7. Hard stop after 3 consecutive losses or 4% max drawdown.
+1. Prove auth with GET /users/me and GET /accounts/{accountId}.
+2. GET /accounts/{accountId}/positions?status=open → check exposure; max 2 concurrent.
+3. Scan liquid perpetual pairs for momentum/structure/volume confluence. Enter only when 2+ factors align.
+4. Size for >= 10 USDC notional and 1–2% risk. Attach TP/SL immediately.
+5. Hard stop after 3 consecutive losses or 4% max drawdown.
 
 SUCCESS CRITERIA (live):
-- /api/v3/brokerage/accounts returns JSON with real USDC balance.
-- Perpetuals portfolio summary/positions return JSON.
-- Manual orders show on Coinbase with correct TP/SL behavior.`;
+- GET /accounts/{accountId} returns JSON with USDC balance.
+- Open/closed positions endpoints return JSON.
+- Manual orders show on Propr with correct TP/SL behavior.`;
 }
 
 function buildCronPrompt() {
   const compPath = getCompendiumPath();
-  const paper = !!storeData.coinbase?.demoMode;
-  const paperStart = Number(storeData.coinbase?.paperStartingValue) || 1000;
-  const ledgerPath = path.join(HERMES_HOME, 'coinbase-paper-ledger.json');
-  const modeBlock = paper
-    ? buildCronPaperTradingBlock(paperStart, ledgerPath)
-    : buildCronLiveTradingBlock();
+  const modeBlock = buildCronLiveTradingBlock();
 
   return `${buildCronLearningHeader()}
 
 MISSION
-You are Hermes on a local cron. You are the analyst, the risk manager, and the only process that places trades. Scan Coinbase perpetual futures, decide, place the order yourself, attach TP/SL, and manage the position. Zero order-placing scripts, zero scanners that submit orders, zero "run agent" wrappers.
+You are Hermes on a local cron. You are the analyst, the risk manager, and the only process that places trades. Scan Propr perpetual futures, decide, place the order yourself, attach TP/SL, and manage the position. Zero order-placing scripts, zero scanners that submit orders, zero "run agent" wrappers.
 
 NUMBER ONE OBJECTIVE
 Protect existing equity and keep the equity curve vertical. Cash is a position. If no setup clears a reward-to-risk of at least 2.5, stay in cash.
 
 OPERATING RULES
-- Transport is plain HTTPS to ${COINBASE_API_URL}. Coinbase does not need a VPN, a browser fingerprint, or a WAF bypass.
+- Transport is plain HTTPS to ${PROPR_REST_URL}. Propr does not need a VPN, a browser fingerprint, or a WAF bypass.
 - Isolated margin only. Longs and shorts both allowed. Maximum 2 concurrent positions.
 - Risk 1–2% of equity per trade. Minimum notional is 10 USDC. Reject any setup below 2.5 reward-to-risk.
 - Hard stop: no new entries after 3 consecutive losses or a 4% drawdown from peak equity.
 - Read durable lessons under ${HERMES_HOME} at the start of every tick and write the updated rules back before you finish.
 
-${buildCronCoinbaseAuthBlock(compPath)}
+${buildCronProprAuthBlock(compPath)}
 
 ${modeBlock}
 
@@ -2187,7 +2185,7 @@ async function configureCron() {
 
   const prompt = buildCronPrompt();
   const jobSpec = {
-    name: 'coinbase-perp-trading',
+    name: 'propr-perp-trading',
     schedule: 'every 5m',
     provider: 'custom',
     base_url: NOUS_INFERENCE_BASE,
@@ -2227,7 +2225,7 @@ async function configureCron() {
           appendLog(`🔧 configureCron: update retry status=${updated.status}`, 'info');
         }
         if (updated.status < 300) {
-          appendLog('✅ Cron job updated: coinbase-perp-trading (every 5m)', 'success');
+          appendLog('✅ Cron job updated: propr-perp-trading (every 5m)', 'success');
           triggerAndConfirmCron(token, existing.id);
           return { ok: true, jobId: existing.id, updated: true };
         }
@@ -2252,7 +2250,7 @@ async function configureCron() {
       appendLog(`🔧 configureCron: create retry status=${created.status}`, 'info');
     }
     if (created.status < 300) {
-      appendLog('✅ Cron configured: coinbase-perp-trading (every 5m)', 'success');
+      appendLog('✅ Cron configured: propr-perp-trading (every 5m)', 'success');
       triggerAndConfirmCron(token, created.body?.id);
       return { ok: true, jobId: created.body?.id, endpoint: '/api/cron/jobs' };
     }
@@ -2339,25 +2337,37 @@ async function triggerAndConfirmCron(token, jobId) {
 ipcMain.handle('get-compendium-path', () => getCompendiumPath());
 ipcMain.handle('get-cron-prompt', () => buildCronPrompt());
 ipcMain.handle('configure-cron', async () => configureCron());
-ipcMain.handle('save-coinbase-credentials', async (event, coinbase) => {
-  await saveCredentials({ coinbase });
-  return storeData.coinbase;
+ipcMain.handle('save-propr-credentials', async (event, propr) => {
+  await saveCredentials({ propr });
+  return storeData.propr;
 });
 ipcMain.handle('save-nous-credentials', async (event, nous) => {
   await saveCredentials({ nous });
   return storeData.nous;
 });
-ipcMain.handle('load-coinbase-credentials', async () => storeData.coinbase);
+ipcMain.handle('load-propr-credentials', async () => storeData.propr);
 ipcMain.handle('load-nous-credentials', async () => storeData.nous);
-ipcMain.handle('test-coinbase-credentials', async (event, credentials) => {
-  return testCoinbaseCredentials(credentials || storeData.coinbase);
+ipcMain.handle('test-propr-credentials', async (event, credentials) => {
+  return testProprCredentials(credentials || storeData.propr);
 });
-ipcMain.handle('pick-coinbase-credential-file', async () => pickCredentialFile('coinbase'));
+ipcMain.handle('pick-propr-credential-file', async () => pickCredentialFile('propr'));
+ipcMain.handle('announce-voice', (_e, text) => {
+  const msg = String(text || '').trim();
+  if (!msg) return;
+  if (process.platform === 'win32') {
+    try {
+      const ps = `New-Object -ComObject SAPI.SpVoice | ForEach-Object { $_.Speak(${JSON.stringify(msg)}, 1) }`;
+      spawn('powershell.exe', ['-NoProfile', '-Command', ps], { windowsHide: true });
+    } catch (_) {}
+    return;
+  }
+  appendLog(`🔊 Voice: ${msg}`, 'info');
+});
 ipcMain.handle('pick-nous-credential-file', async () => pickCredentialFile('nous'));
 
 ipcMain.handle('get-credentials', () => storeData);
 ipcMain.handle('save-credentials', async (_e, data) => {
-  try { storeData = { ...storeData, ...data }; persistStore(); } catch {}
+  try { storeData = migrateStoreData({ ...storeData, ...data }); saveStore(storeData); } catch {}
   try {
     await syncBlohunterCredentials();
   } catch (e) {
@@ -2368,15 +2378,14 @@ ipcMain.handle('save-credentials', async (_e, data) => {
 ipcMain.handle('write-compendium', async () => {
   try {
     const compPath = getCompendiumPath();
-    const coinbase = storeData.coinbase || {};
+    const propr = storeData.propr || {};
     const lines = [
-      '# Coinbase Advanced Trade CDP API credentials',
-      '# Auto-generated by KnightTrader',
+      '# Propr trading API credentials',
+      '# Auto-generated by KnightTrader Propr',
       '',
-      `API Key Name: ${coinbase.apiKey || ''}`,
+      `Propr API Key: ${propr.apiKey || ''}`,
     ];
-    if (coinbase.passphrase) lines.push(`Passphrase: ${coinbase.passphrase}`);
-    lines.push(`Private Key: ${coinbase.secretKey || ''}`);
+    if (propr.accountId) lines.push(`Account ID: ${propr.accountId}`);
     fs.writeFileSync(compPath, lines.join('\n') + '\n', 'utf8');
     return { ok: true, path: compPath };
   } catch (e) {
@@ -2415,12 +2424,12 @@ ipcMain.handle('unthrottle-webview', (_e, webContentsId) => {
 ipcMain.handle('get-trading-status', () => getBlohunterBridge().getStatus());
 ipcMain.handle('start-trading-dashboard', async () => {
   const bridge = getBlohunterBridge();
-  bridge.setLiveAccountProvider(() => fetchLiveCoinbaseAccount({ quiet: true }));
+  bridge.setLiveAccountProvider(() => fetchLiveProprAccount({ quiet: true }));
   const result = await bridge.start({
-    apiKey: storeData.coinbase?.apiKey,
-    secretKey: storeData.coinbase?.secretKey,
-    passphrase: storeData.coinbase?.passphrase || '',
-    demoMode: !!storeData.coinbase?.demoMode,
+    apiKey: storeData.propr?.apiKey,
+    secretKey: 'propr',
+    passphrase: 'propr',
+    demoMode: false,
   });
   if (!result.ok) appendLog(`⚠ Trading dashboard: ${result.error}`, 'warn');
   else appendLog('✅ Trading dashboard ready', 'success');
@@ -2486,7 +2495,7 @@ function createTray() {
   if (appTray) return appTray;
   let iconPath = path.join(__dirname, 'assets', 'icon.ico');
   if (!fs.existsSync(iconPath)) {
-    const fallbackPath = path.join(app.getPath('temp'), 'knighttrader-coinbase-tray.png');
+    const fallbackPath = path.join(app.getPath('temp'), 'knighttrader-propr-tray.png');
     try {
       const img = nativeImage.createEmpty();
       const buf = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGwAAABTSURBVGhD7c4BDQAwDASh+qev/TZtA5uTOq8k51xmzpm1sWZs6p2TmjOZNmdNZs5k2pw1mTmTZ3PWZPJsbs1kZsz/ZjIlMzN+ze8A3YB4qBYXrUQAAAAASUVORK5CYII=');
@@ -2502,7 +2511,7 @@ function createTray() {
     { label: 'Show', click: () => restoreMainWindow() },
     { label: 'Quit', click: () => { app.isQuitting = true; stopHermesDashboard(); app.quit(); } },
   ]);
-  appTray.setToolTip('KnightTrader Coinbase');
+  appTray.setToolTip('KnightTrader Propr');
   appTray.setContextMenu(contextMenu);
   appTray.on('click', restoreMainWindow);
   return appTray;
@@ -2564,7 +2573,7 @@ function handleBhProtocol(request) {
     let data = fs.readFileSync(served.filePath);
     if (served.injectSkin) {
       let html = data.toString('utf8');
-      html = html.replace(/<title>BloHunter Connect<\/title>/i, '<title>KnightTrader Coinbase</title>');
+      html = html.replace(/<title>BloHunter Connect<\/title>/i, '<title>KnightTrader Propr</title>');
       if (!html.includes('__kt__/kt-skin.css')) {
         html = html.replace(
           '</head>',
@@ -2670,7 +2679,7 @@ async function autoconnectHermes() {
       return;
     }
     const cron = await configureCron();
-    if (cron?.ok) appendLog('Coinbase cron configured on launch.', 'success');
+    if (cron?.ok) appendLog('Propr cron configured on launch.', 'success');
     else appendLog(`Cron autoconfig: ${cron?.msg || 'needs setup'}`, 'warn');
     const picked = await autoSelectWorkingFreeModel();
     if (picked?.model) await updateCronModelOnly(picked.model);
@@ -2680,7 +2689,7 @@ async function autoconnectHermes() {
 }
 
 if (process.platform === 'win32') {
-  app.setAppUserModelId('com.knighttrader.coinbase');
+  app.setAppUserModelId('com.knighttrader.propr');
 }
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
@@ -2697,11 +2706,11 @@ app.whenReady().then(async () => {
   attachBhProtocol(session.fromPartition('persist:blohunter-trading'));
 
   createWindow();
-  appendLog(`🚀 KnightTrader Coinbase started. Hermes sandbox: ${HERMES_HOME}`, 'success');
+  appendLog(`🚀 KnightTrader Propr started. Hermes sandbox: ${HERMES_HOME}`, 'success');
   const bhRoot = getBlohunterBridge().getConnectRoot();
   if (bhRoot) appendLog(`📈 BloHunter Connect: ${bhRoot}`, 'info');
   else appendLog('⚠ BloHunter Connect not found — Trading tab needs Downloads\\blohunter-connect', 'warn');
-  getBlohunterBridge().setLiveAccountProvider(() => fetchLiveCoinbaseAccount({ quiet: true }));
+  getBlohunterBridge().setLiveAccountProvider(() => fetchLiveProprAccount({ quiet: true }));
 
   autoconnectHermes();
   setTimeout(() => {

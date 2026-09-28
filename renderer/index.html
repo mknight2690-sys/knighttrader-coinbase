@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; font-src https://fonts.gstatic.com data:; img-src 'self' data: http://127.0.0.1:* http://localhost:* https://trade.coinbase.com; script-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* https://fonts.googleapis.com https://fonts.gstatic.com https://inference-api.nousresearch.com https://api.coinbase.com https://api-public.sandbox.coinbase.com https://trade.coinbase.com https://blohunter.com; frame-src 'self' http://127.0.0.1:* http://localhost:* https://trade.coinbase.com; child-src 'self' http://127.0.0.1:* http://localhost:*;">
-  <title>KnightTrader Coinbase</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; font-src https://fonts.gstatic.com data:; img-src 'self' data: http://127.0.0.1:* http://localhost:* https://app.propr.xyz https://cdn.propr.xyz; script-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* https://fonts.googleapis.com https://fonts.gstatic.com https://inference-api.nousresearch.com https://api.propr.xyz https://app.propr.xyz https://blohunter.com; frame-src 'self' http://127.0.0.1:* http://localhost:* https://app.propr.xyz; child-src 'self' http://127.0.0.1:* http://localhost:*;">
+  <title>KnightTrader Propr</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -22,7 +22,7 @@
           <defs><linearGradient id="tg" x1="4" y1="2" x2="20" y2="22" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#f5c542"/><stop offset="100%" stop-color="#e8a020"/></linearGradient></defs>
         </svg>
       </div>
-      <span id="titlebar-title">KnightTrader Coinbase — Hermes Launcher</span>
+      <span id="titlebar-title">KnightTrader Propr — Hermes Launcher</span>
     </div>
     <div id="titlebar-controls">
       <button id="btn-minimize">&#x2212;</button>
@@ -57,7 +57,7 @@
           </svg>
         </div>
         <div class="brand-text">
-          <span class="brand-name">KnightTrader</span>
+          <span class="brand-name">KnightTrader Propr</span>
           <span class="brand-sub">Hermes Launcher</span>
         </div>
       </div>
@@ -97,8 +97,8 @@
       </ul>
 
       <div id="sidebar-footer">
-        <div class="version-tag" id="sidebar-version">v1.1.3</div>
-        <button id="btn-open-coinbase" class="link-btn">Coinbase ↗</button>
+        <div class="version-tag" id="sidebar-version">v2.0.0</div>
+        <button id="btn-open-propr" class="link-btn">Propr ↗</button>
       </div>
     </nav>
 
@@ -167,37 +167,31 @@
             </div>
           </div>
 
-          <!-- Coinbase Credentials -->
+          <!-- Propr Credentials -->
           <div class="card">
             <div class="card-header">
-              <div class="card-icon coinbase-icon">
+              <div class="card-icon propr-icon">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2v20M2 12h20"/></svg>
               </div>
-              <div><div class="card-title">Coinbase API Keys</div><div class="card-desc">API Key Name + Private Key from Coinbase Advanced Trade</div></div>
-              <a href="#" class="card-help" id="link-coinbase-api">Coinbase API ↗</a>
+              <div><div class="card-title">Propr API Key</div><div class="card-desc">Single pk_live_ key from app.propr.xyz — no VPN required</div></div>
+              <a href="#" class="card-help" id="link-propr-api">Propr API ↗</a>
             </div>
             <div class="field-group">
               <div class="field-full cred-file-row">
-                <button type="button" id="btn-load-coinbase-file" class="btn-secondary">Load from file…</button>
-                <span id="coinbase-file-path" class="cred-file-path">e.g. My Coinbase API Compendium.txt</span>
+                <button type="button" id="btn-load-propr-file" class="btn-secondary">Load from file…</button>
+                <span id="propr-file-path" class="cred-file-path">e.g. Propr API Key.txt</span>
               </div>
-              <div class="field">
-                <label for="coinbase-api-key">API Key</label>
+              <div class="field-full">
+                <label for="propr-api-key">Propr API Key</label>
                 <div class="input-wrap">
-                  <input type="password" id="coinbase-api-key" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off"/>
-                  <button type="button" class="toggle-vis" data-target="coinbase-api-key">👁</button>
+                  <input type="password" id="propr-api-key" placeholder="pk_live_…" autocomplete="off"/>
+                  <button type="button" class="toggle-vis" data-target="propr-api-key">👁</button>
                 </div>
-              </div>
-              <div class="field">
-                <label for="coinbase-secret-key">Secret Key</label>
-                <div class="input-wrap">
-                  <input type="password" id="coinbase-secret-key" placeholder="••••••••••••••••••••••••" autocomplete="off"/>
-                  <button type="button" class="toggle-vis" data-target="coinbase-secret-key">👁</button>
-                </div>
+                <div class="field-hint">Generate at app.propr.xyz/settings. Active challenge account is resolved automatically.</div>
               </div>
               <div class="field-full nous-test-row">
-                <button type="button" id="btn-test-coinbase" class="btn-secondary" disabled>Test Coinbase Credentials</button>
-                <span id="coinbase-test-status" class="nous-test-status"></span>
+                <button type="button" id="btn-test-propr" class="btn-secondary" disabled>Test Propr Credentials</button>
+                <span id="propr-test-status" class="nous-test-status"></span>
               </div>
             </div>
           </div>
@@ -266,7 +260,7 @@
             <div class="step-num">2</div>
             <div class="step-body">
               <div class="step-title">Write Credentials File</div>
-              <div class="step-desc">Saves your Coinbase keys to <code id="compendium-path-display">Hermes config directory</code> — the file Hermes reads.</div>
+              <div class="step-desc">Saves your Propr API key to <code id="compendium-path-display">Hermes config directory</code> — the file Hermes reads.</div>
               <div class="step-actions">
                 <button id="btn-write-compendium" class="btn-secondary">Write Compendium File</button>
                 <span id="compendium-status" class="step-ok hidden">✓ Written</span>
@@ -299,7 +293,7 @@
             <div class="step-num">4</div>
             <div class="step-body">
               <div class="step-title">Configure 5-Minute Cron</div>
-              <div class="step-desc">Auto-creates the <code>coinbase-perp-trading</code> cron in Hermes with the full trading prompt.</div>
+              <div class="step-desc">Auto-creates the <code>propr-perp-trading</code> cron in Hermes with the full trading prompt.</div>
               <div class="step-actions">
                 <button id="btn-configure-cron" class="btn-primary" disabled>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
@@ -347,7 +341,7 @@
         <div class="panel-header trading-header">
           <div>
             <h1>Live Trading</h1>
-            <p class="panel-sub">Positions, equity, signals, and voice — live from Hermes.</p>
+            <p class="panel-sub">Equity, open positions, and closed trades stream live from Propr — voice announcer included.</p>
           </div>
           <div style="display:flex;align-items:center;gap:10px;">
             <button type="button" id="btn-trading-voice" class="btn-secondary">Voice</button>
@@ -391,8 +385,8 @@
         <div class="card">
           <div class="card-header"><div class="card-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></div><div class="card-title">Quick Links</div></div>
           <div class="links-grid">
-            <button class="link-card" id="link-coinbase-dashboard">📊 Coinbase Advanced Trade</button>
-            <button class="link-card" id="link-coinbase-api-page">🔑 Coinbase API Keys</button>
+            <button class="link-card" id="link-propr-dashboard">📊 Propr Dashboard</button>
+            <button class="link-card" id="link-propr-api-page">🔑 Propr API Keys</button>
             <button class="link-card" id="link-nous-portal-settings">🤖 Nous Portal</button>
             <button class="link-card" id="link-hermes-dashboard">🖥 Hermes Dashboard</button>
             <button class="link-card" id="link-hermes-docs">📚 Hermes Docs</button>
@@ -402,7 +396,7 @@
         <div class="card">
           <div class="card-header"><div class="card-icon">ℹ</div><div class="card-title">About</div></div>
           <div class="about-body">
-            <div class="about-row"><span>App</span><span id="about-app-version">KnightTrader v1.1.2</span></div>
+            <div class="about-row"><span>App</span><span id="about-app-version">KnightTrader Propr v2.0.0</span></div>
             <div class="about-row"><span>Engine</span><span>Electron 28 + Node.js</span></div>
             <div class="about-row"><span>Storage</span><span>AES-256-CBC encrypted</span></div>
             <div class="about-row"><span>Hermes</span><span id="about-hermes-ver">Checking...</span></div>
@@ -412,72 +406,44 @@
 
       <!-- ── HOW-TO TAB ───────────────────────────────────────── -->
       <section id="tab-howto" class="tab-panel">
-        <div class="panel-header"><h1>How-To: Coinbase API Keys</h1><p class="panel-sub">Four steps. From nothing installed to the cron placing trades: 15 minutes or less. No VPN.</p></div>
+        <div class="panel-header"><h1>How-To: Propr API Key</h1><p class="panel-sub">Three steps. From nothing installed to the cron placing trades: 15 minutes or less. No VPN.</p></div>
 
         <div class="card">
-          <div class="card-header"><div class="card-icon coinbase-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2v20M2 12h20"/></svg></div><div class="card-title">Step 1: Create a Coinbase Account</div></div>
+          <div class="card-header"><div class="card-icon propr-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2v20M2 12h20"/></svg></div><div class="card-title">Step 1: Get a Propr Challenge Account</div></div>
           <div class="card-body">
             <ol style="padding-left: 20px; line-height: 1.8;">
-              <li>Go to <a href="https://coinbase.com" target="_blank">coinbase.com</a> and click <strong>Get Started</strong></li>
-              <li>Enter your name, email, and create a strong password</li>
-              <li>Verify your email address via the link Coinbase sends</li>
-              <li>Complete identity verification (ID + selfie) — required for trading</li>
-              <li>Add a payment method (bank account, debit card, or wire transfer)</li>
-              <li>Buy at least ~$50 of USDT or USDC on the main Coinbase app</li>
+              <li>Go to <a href="https://app.propr.xyz" target="_blank">app.propr.xyz</a> and sign in</li>
+              <li>Purchase or activate a challenge — you need an <strong>active</strong> attempt with a funded account</li>
+              <li>Confirm your account shows a USDC balance on the Propr dashboard</li>
             </ol>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-header"><div class="card-icon coinbase-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2v20M2 12h20"/></svg></div><div class="card-title">Step 2: Access Coinbase Advanced Trade</div></div>
+          <div class="card-header"><div class="card-icon propr-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2v20M2 12h20"/></svg></div><div class="card-title">Step 2: Create Propr API Key</div></div>
           <div class="card-body">
             <ol style="padding-left: 20px; line-height: 1.8;">
-              <li>Go to <a href="https://trade.coinbase.com" target="_blank">trade.coinbase.com</a> (this is Coinbase Advanced Trade)</li>
-              <li>Your USDT/USDC from step 1 should appear in your portfolio</li>
-              <li>If not, click <strong>Transfer</strong> → move from Coinbase main to Advanced Trade</li>
-              <li>Verify you can see USDT/USDC balance available for trading</li>
+              <li>Open <a href="https://app.propr.xyz/settings" target="_blank">app.propr.xyz/settings</a></li>
+              <li>Create an API key — it starts with <code>pk_live_</code></li>
+              <li>Copy the key immediately and store it securely</li>
             </ol>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-header"><div class="card-icon coinbase-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2v20M2 12h20"/></svg></div><div class="card-title">Step 3: Create Advanced Trade API Key</div></div>
-          <div class="card-body">
-            <ol style="padding-left: 20px; line-height: 1.8;">
-              <li>Go to <a href="https://www.coinbase.com/orders" target="_blank">coinbase.com/orders</a> → click <strong>API</strong> (top right)</li>
-              <li>Or visit <a href="https://cdp.coinbase.com" target="_blank">cdp.coinbase.com</a> directly</li>
-              <li>Click <strong>New API Key</strong> → select <strong>Advanced Trade API</strong></li>
-              <li>Name it (e.g., <code>hermes</code>)</li>
-              <li>Permissions: check <strong>View</strong> (read balances/products) and <strong>Trade</strong> (place/cancel orders)</li>
-              <li>Create an API key — <strong>write down the passphrase if shown; some setups do not use one</strong></li>
-              <li>Complete 2FA if prompted</li>
-              <li><strong>Copy both values immediately</strong> — the Private Key is shown <strong>ONCE ONLY</strong></li>
-            </ol>
-            <div class="field-hint" style="margin-top: 10px;">
-              ⚠ The Private Key is base64-encoded. Do not modify it. Store your API Key Name and Private Key securely. If a passphrase is shown, store that too.
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-header"><div class="card-icon coinbase-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2v20M2 12h20"/></svg></div><div class="card-title">Step 4: Save Keys to Compendium File</div></div>
+          <div class="card-header"><div class="card-icon propr-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2v20M2 12h20"/></svg></div><div class="card-title">Step 3: Save Key in Setup</div></div>
           <div class="card-body">
             <ol style="padding-left: 20px; line-height: 1.8;">
               <li>Open the <strong>Setup</strong> tab in this app</li>
-              <li>Scroll to <strong>Coinbase API Keys</strong> section</li>
-              <li>Paste your <strong>API Key Name</strong> and <strong>Private Key</strong></li>
-              <li>If your file includes a passphrase, paste it too; otherwise leave it blank</li>
-              <li>Click <strong>Save & Write Compendium</strong> — this creates the credentials file Hermes reads</li>
-              <li>Example file format:</li>
+              <li>Paste your <code>pk_live_</code> key or use <strong>Load from file…</strong></li>
+              <li>Click <strong>Test Propr Credentials</strong> — should show balance and open positions</li>
+              <li>Click <strong>Save & Write Compendium</strong></li>
             </ol>
-            <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-family:monospace;white-space:pre-wrap;margin-top:6px">API Key Name: organizations/.../apiKeys/...
-Private Key: u6DRGN3Zoc1b6FgT8yfXJc3HOdkpHds4reGbLYXAxXGPZGAA8N/HCQqi53ZjAjipN2H09oBEwovEP6zujVDu7A==
+            <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-family:monospace;white-space:pre-wrap;margin-top:6px">Propr API Key: pk_live_...
 
 # AI Credentials (Nous Portal)
 NOUS_API_KEY: ...
 NOUS_MODEL: ...</div>
-              <li>The file is what Hermes reads for your cron trading job</li>
-            </ol>
           </div>
         </div>
 
@@ -490,7 +456,7 @@ NOUS_MODEL: ...</div>
               <li>Step 1: Click <strong>Install Hermes</strong> — wait 2–5 minutes</li>
               <li>Step 2: Click <strong>Write Compendium File</strong></li>
               <li>Step 3: Click <strong>Start Dashboard + Gateway</strong></li>
-              <li>Step 4: Click <strong>Auto-Configure Cron</strong> — creates <code>coinbase-perp-trading</code> cron</li>
+              <li>Step 4: Click <strong>Auto-Configure Cron</strong> — creates <code>propr-perp-trading</code> cron</li>
             </ol>
           </div>
         </div>
@@ -501,7 +467,8 @@ NOUS_MODEL: ...</div>
             <ol style="padding-left: 20px; line-height: 1.8;">
               <li>Wait 1–3 minutes after cron is configured</li>
               <li>Check <strong>Logs</strong> tab — you should see Hermes output</li>
-              <li>Check <strong>Coinbase Advanced Trade</strong> → Positions/Order History for trades</li>
+              <li>Check the <strong>Trading</strong> tab — equity and positions stream from Propr REST</li>
+              <li>Check <strong>Propr dashboard</strong> → Positions for trades placed by Hermes</li>
               <li>In Hermes dashboard (embedded), click <strong>Chats</strong> — new entry every ~1 min</li>
               <li>Go to the <strong>Trading</strong> tab and click <strong>Voice</strong> to enable position announcements</li>
               <li>When a position opens, the app announces <strong>Opened [symbol]</strong>; when it closes, it announces <strong>Closed [symbol]</strong></li>
@@ -526,9 +493,9 @@ NOUS_MODEL: ...</div>
           <div class="card-body" style="line-height: 1.8;">
             <ul style="padding-left: 20px;">
               <li><strong>Risk:</strong> Trading can lose money. Only use funds you can afford to lose.</li>
-              <li><strong>Private Key:</strong> Shown ONCE when created. If lost, you must create a new API key.</li>
-              <li><strong>Passphrase:</strong> Optional in many Coinbase setups. Store it only if your API key shows one.</li>
-              <li><strong>Perpetual Futures:</strong> The cron trades Coinbase perpetual futures (e.g., BTC-USD PERP) — different from spot trading.</li>
+              <li><strong>API Key:</strong> Propr keys start with <code>pk_live_</code>. Revoke and regenerate at app.propr.xyz/settings if compromised.</li>
+              <li><strong>No VPN:</strong> Propr REST is plain HTTPS — no browser fingerprint or WAF bypass needed.</li>
+              <li><strong>Perpetual Futures:</strong> The cron trades Propr-funded perpetual futures on your active challenge account.</li>
               <li><strong>Stay Awake & Connected:</strong> Use the guidance above so the agent can keep running on schedule.</li>
             </ul>
           </div>

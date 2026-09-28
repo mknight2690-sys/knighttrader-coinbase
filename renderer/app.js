@@ -13,6 +13,10 @@ let tradingPositionPollTimer = null;
 function speakTradingVoice(message) {
   if (!message || !tradingVoiceEnabled) return;
   try {
+    if (window.kt?.announceVoice) {
+      window.kt.announceVoice(message);
+      return;
+    }
     if (!('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(message);
@@ -93,10 +97,9 @@ const el = {
   nousApiKey: $('nous-api-key'), nousModel: $('nous-model'),
   btnLoadNousFile: $('btn-load-nous-file'), nousFilePath: $('nous-file-path'),
   btnTestNous: $('btn-test-nous'), nousTestStatus: $('nous-test-status'),
-  coinbaseApiKey: $('coinbase-api-key'), coinbaseSecretKey: $('coinbase-secret-key'),
-  coinbasePaperStartingValue: $('coinbase-paper-starting-value'),
-  btnLoadCoinbaseFile: $('btn-load-coinbase-file'), coinbaseFilePath: $('coinbase-file-path'),
-  btnTestCoinbase: $('btn-test-coinbase'), coinbaseTestStatus: $('coinbase-test-status'),
+  proprApiKey: $('propr-api-key'),
+  btnLoadProprFile: $('btn-load-propr-file'), proprFilePath: $('propr-file-path'),
+  btnTestPropr: $('btn-test-propr'), proprTestStatus: $('propr-test-status'),
   saveStatus: $('save-status'), btnSave: $('btn-save'),
 
   // Hermes tab
@@ -169,7 +172,7 @@ async function init() {
     const normalized = appVersion ? String(appVersion).replace(/^v/, '') : '';
     if (normalized) {
       if (el.sidebarVersion) el.sidebarVersion.textContent = `v${normalized}`;
-      if (el.aboutAppVersion) el.aboutAppVersion.textContent = `KnightTrader v${normalized}`;
+      if (el.aboutAppVersion) el.aboutAppVersion.textContent = `KnightTrader Propr v${normalized}`;
     }
   } catch (_) {}
 
@@ -184,12 +187,8 @@ async function init() {
       el.nousApiKey.value = creds.nouse.apiKey || '';
       setNousModelValue(creds.nouse.model || 'tencent/hy3:free');
     }
-    if (creds.coinbase) {
-      el.coinbaseApiKey.value = creds.coinbase.apiKey || '';
-      el.coinbaseSecretKey.value = creds.coinbase.secretKey || '';
-      if (el.coinbasePaperStartingValue && creds.coinbase.paperStartingValue != null) {
-        el.coinbasePaperStartingValue.value = String(creds.coinbase.paperStartingValue);
-      }
+    if (creds.propr) {
+      el.proprApiKey.value = creds.propr.apiKey || '';
     }
   } catch (e) {}
 
@@ -253,7 +252,7 @@ async function init() {
   }
 
   updateNousTestButton();
-  updateCoinbaseTestButton();
+  updateProprTestButton();
 }
 
 // ── Hermes install check ──────────────────────────────────────
@@ -369,9 +368,8 @@ async function saveAndWriteCompendium() {
       apiKey: el.nousApiKey.value.trim(),
       model: el.nousModel.value
     },
-    coinbase: {
-      apiKey: el.coinbaseApiKey.value.trim(),
-      secretKey: el.coinbaseSecretKey.value.trim(),
+    propr: {
+      apiKey: el.proprApiKey.value.trim(),
     }
   };
   try {
@@ -438,23 +436,20 @@ function applyNousFromFile(data) {
   setNousTestStatus('', '');
 }
 
-function applyCoinbaseFromFile(data) {
-  if (data.apiKey) el.coinbaseApiKey.value = data.apiKey;
-  if (data.secretKey) el.coinbaseSecretKey.value = data.secretKey;
-  if (el.coinbaseDemoMode && data.demoMode != null) el.coinbaseDemoMode.checked = !!data.demoMode;
-  updateCoinbaseTestButton();
-  setCoinbaseTestStatus('', '');
+function applyProprFromFile(data) {
+  if (data.apiKey) el.proprApiKey.value = data.apiKey;
+  updateProprTestButton();
+  setProprTestStatus('', '');
 }
 
-function updateCoinbaseTestButton() {
-  const ready = el.coinbaseApiKey.value.trim().length > 0
-    && el.coinbaseSecretKey.value.trim().length > 0;
-  el.btnTestCoinbase.disabled = !ready;
+function updateProprTestButton() {
+  const ready = el.proprApiKey.value.trim().length > 0;
+  el.btnTestPropr.disabled = !ready;
 }
 
-function setCoinbaseTestStatus(msg, state) {
-  el.coinbaseTestStatus.textContent = msg;
-  el.coinbaseTestStatus.className = 'nous-test-status' + (state ? ` ${state}` : '');
+function setProprTestStatus(msg, state) {
+  el.proprTestStatus.textContent = msg;
+  el.proprTestStatus.className = 'nous-test-status' + (state ? ` ${state}` : '');
 }
 
 // ── Logs ─────────────────────────────────────────────────────
@@ -708,24 +703,24 @@ el.btnLoadNousFile.addEventListener('click', async () => {
   }
 });
 
-el.btnLoadCoinbaseFile.addEventListener('click', async () => {
-  el.btnLoadCoinbaseFile.disabled = true;
+el.btnLoadProprFile.addEventListener('click', async () => {
+  el.btnLoadProprFile.disabled = true;
   try {
-    const result = await window.kt.pickCoinbaseCredentialFile();
+    const result = await window.kt.pickProprCredentialFile();
     if (result.cancelled) return;
     if (!result.ok) {
-      setCoinbaseTestStatus(`✗ ${result.error || 'Could not load file'}`, 'error');
+      setProprTestStatus(`✗ ${result.error || 'Could not load file'}`, 'error');
       return;
     }
-    applyCoinbaseFromFile(result.coinbase);
-    setCredFilePath(el.coinbaseFilePath, result.path);
+    applyProprFromFile(result.propr);
+    setCredFilePath(el.proprFilePath, result.path);
     try {
-      await window.kt.saveCredentials({ coinbase: result.coinbase || {} });
+      await window.kt.saveCredentials({ propr: result.propr || {} });
     } catch {}
   } catch (e) {
-    setCoinbaseTestStatus(`✗ ${e.message}`, 'error');
+    setProprTestStatus(`✗ ${e.message}`, 'error');
   } finally {
-    el.btnLoadCoinbaseFile.disabled = false;
+    el.btnLoadProprFile.disabled = false;
   }
 });
 
@@ -751,38 +746,32 @@ el.btnTestNous.addEventListener('click', async () => {
   }
 });
 
-function bindCoinbaseTestInputs() {
+function bindProprTestInputs() {
   const reset = () => {
-    updateCoinbaseTestButton();
-    setCoinbaseTestStatus('', '');
+    updateProprTestButton();
+    setProprTestStatus('', '');
   };
-  el.coinbaseApiKey.addEventListener('input', reset);
-  el.coinbaseSecretKey.addEventListener('input', reset);
-  if (el.coinbaseDemoMode) el.coinbaseDemoMode.addEventListener('change', reset);
+  el.proprApiKey.addEventListener('input', reset);
 }
-bindCoinbaseTestInputs();
+bindProprTestInputs();
 
-el.btnTestCoinbase.addEventListener('click', async () => {
-  const creds = {
-    apiKey: el.coinbaseApiKey.value.trim(),
-    secretKey: el.coinbaseSecretKey.value.trim(),
-    demoMode: !!(el.coinbaseDemoMode && el.coinbaseDemoMode.checked),
-  };
-  if (!creds.apiKey || !creds.secretKey) return;
+el.btnTestPropr.addEventListener('click', async () => {
+  const creds = { apiKey: el.proprApiKey.value.trim() };
+  if (!creds.apiKey) return;
 
-  el.btnTestCoinbase.disabled = true;
-  setCoinbaseTestStatus('Testing…', 'pending');
+  el.btnTestPropr.disabled = true;
+  setProprTestStatus('Testing…', 'pending');
   try {
-    const result = await window.kt.testCoinbaseCredentials(creds);
+    const result = await window.kt.testProprCredentials(creds);
     if (result.ok) {
-      setCoinbaseTestStatus(`✓ ${result.mode} connected — ${result.summary}`, 'ok');
+      setProprTestStatus(`✓ ${result.mode} connected — ${result.summary}`, 'ok');
     } else {
-      setCoinbaseTestStatus(`✗ ${result.error || 'Test failed'}`, 'error');
+      setProprTestStatus(`✗ ${result.error || 'Test failed'}`, 'error');
     }
   } catch (e) {
-    setCoinbaseTestStatus(`✗ ${e.message}`, 'error');
+    setProprTestStatus(`✗ ${e.message}`, 'error');
   } finally {
-    updateCoinbaseTestButton();
+    updateProprTestButton();
   }
 });
 
@@ -943,14 +932,14 @@ el.logContainer.addEventListener('scroll', () => {
 const NOUS_PORTAL_URL = 'https://portal.nousresearch.com/manage-subscription';
 
 const LINKS = {
-  'link-coinbase-dashboard': 'https://trade.coinbase.com/advanced',
-  'link-coinbase-api-page': 'https://www.coinbase.com/orders',
+  'link-propr-dashboard': 'https://app.propr.xyz',
+  'link-propr-api-page': 'https://app.propr.xyz/settings',
   'link-nous-portal-settings': NOUS_PORTAL_URL,
   'link-hermes-dashboard': 'http://127.0.0.1:9130',
   'link-hermes-docs': 'https://hermes-agent.nousresearch.com/docs/integrations/nous-portal',
   'link-nous-portal': NOUS_PORTAL_URL,
-  'link-coinbase-api': 'https://www.coinbase.com/orders',
-  'btn-open-coinbase': 'https://trade.coinbase.com/advanced'
+  'link-propr-api': 'https://app.propr.xyz/settings',
+  'btn-open-propr': 'https://app.propr.xyz'
 };
 Object.entries(LINKS).forEach(([id, url]) => {
   const elem = document.getElementById(id);

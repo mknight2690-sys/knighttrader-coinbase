@@ -6,6 +6,10 @@ const { BlohunterStorage } = require('./blohunter/storage');
 const { createSseOffscreen } = require('./blohunter/sse-offscreen');
 const { installNodeFetch } = require('./blohunter/node-https');
 const { installEd25519Subtle } = require('./blohunter/ed25519-polyfill');
+const {
+  mapProprOpenPositions,
+  mapProprClosedPositions,
+} = require('./lib/propr-api');
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -464,10 +468,10 @@ class BlohunterBridge {
   constructor({ userDataPath, hermesHome, hermesDashboardPort = 9130, deskHttpPort = 9140, log = () => {} }) {
     this.log = log;
     this.userDataPath = userDataPath;
-    this.hermesHome = hermesHome || path.join(userDataPath, 'hermes-coinbase');
+    this.hermesHome = hermesHome || path.join(userDataPath, 'hermes-propr');
     this.hermesDashboardPort = hermesDashboardPort;
     this.deskHttpPort = deskHttpPort;
-    this.storagePath = path.join(userDataPath, 'blohunter-storage-coinbase.json');
+    this.storagePath = path.join(userDataPath, 'blohunter-storage-propr.json');
     this.storage = new BlohunterStorage(this.storagePath);
     this.connectRoot = resolveBlohunterConnectRoot();
     this.runtime = null;
@@ -482,7 +486,7 @@ class BlohunterBridge {
     this.gateTimer = null;
     this.handshakeTimer = null;
     this.livePollTimer = null;
-    this.liveCoinbase = null;
+    this.livePropr = null;
     this.liveAccountProvider = null;
     this.dashboardFetchTail = Promise.resolve();
     this.lastKnownOpenPositions = [];
@@ -849,12 +853,12 @@ class BlohunterBridge {
     this.liveAccountProvider = typeof provider === 'function' ? provider : null;
   }
 
-  applyLiveCoinbaseBalances(data) {
-    const live = this.liveCoinbase;
-    if (!live || !live.ok || !live.fetchedAt || !data?.balances) return;
-    data.balances.totalEquity = Number(live.totalEquity) || 0;
-    data.balances.settledEquity = Number(live.totalEquity) || 0;
-    data.balances.totalAvailable = Number(live.totalAvailable) || 0;
+  applyLiveProprSnapshot(data, live) {
+    if (!live?.ok || !data?.balances) return;
+    if (live.totalEquity > 0) data.balances.totalEquity = live.totalEquity;
+    if (live.totalAvailable >= 0) data.balances.totalAvailable = live.totalAvailable;
+    if (Number.isFinite(live.totalUnrealized)) data.balances.totalUnrealized = live.totalUnrealized;
+    data.balances.settledEquity = live.totalEquity - (live.totalUnrealized || 0);
     if (Array.isArray(live.accountRows) && live.accountRows.length) {
       data.balances.account = live.accountRows;
     }
@@ -867,11 +871,14 @@ class BlohunterBridge {
       this.liveAccountProvider()
         .then((live) => {
           if (live && live.ok) {
-            this.liveCoinbase = live;
+            this.livePropr = live;
+            if (Array.isArray(live.mappedOpenPositions)) {
+              this.lastKnownOpenPositions = live.mappedOpenPositions.slice();
+            }
             this.nudgeEquityChart();
           }
         })
-        .catch((err) => this.log('[Coinbase] live account poll:', err.message));
+        .catch((err) => this.log('[Propr] live account poll:', err.message));
     };
     tick();
     this.livePollTimer = setInterval(tick, 8000);
@@ -885,27 +892,107 @@ class BlohunterBridge {
     }
   }
 
-  async refreshLiveCoinbaseAccount() {
+  async refreshLiveProprAccount() {
     if (!this.liveAccountProvider) return;
     try {
       const live = await this.liveAccountProvider();
-      if (live && live.ok) this.liveCoinbase = live;
+      if (live && live.ok) {
+        this.livePropr = live;
+        if (Array.isArray(live.mappedOpenPositions)) {
+          this.lastKnownOpenPositions = live.mappedOpenPositions.slice();
+        }
+      }
     } catch (err) {
-      this.log('[Coinbase] live account read:', err.message);
+      this.log('[Propr] live account read:', err.message);
     }
   }
 
   async enrichDashboardSnapshot(result) {
     if (!result || typeof result !== 'object') return result;
-    if (!result.ok || !result.data || typeof result.data !== 'object') {
+
+    let live = this.livePropr;
+    if (this.liveAccountProvider) {
+      try {
+        const fetched = await this.liveAccountProvider();
+        if (fetched?.ok) {
+          live = fetched;
+          this.livePropr = fetched;
+        }
+      } catch (err) {
+        this.log('[Propr] live overlay fetch:', err.message);
+      }
+    }
+
+    if (!result.data || typeof result.data !== 'object') {
+      if (live?.ok) {
+        const recentClosed = live.mappedClosedPositions || mapProprClosedPositions(live.closedPositions || []);
+        const openPositions = live.mappedOpenPositions || mapProprOpenPositions(live.openPositions || []);
+        this.lastKnownOpenPositions = openPositions.slice();
+        return {
+          ok: true,
+          data: {
+            balances: {
+              account: live.accountRows,
+              totalEquity: live.totalEquity,
+              totalAvailable: live.totalAvailable,
+              totalUnrealized: live.totalUnrealized,
+              settledEquity: live.totalEquity - (live.totalUnrealized || 0),
+            },
+            openPositions,
+            recentClosed,
+            closedTrades48h: recentClosed.filter(
+              (row) => row.closedAt && row.closedAt >= Date.now() - 48 * 60 * 60 * 1000,
+            ),
+            exposure: {
+              openCount: live.openCount,
+              totalMargin: live.totalMargin,
+              totalUnrealized: live.totalUnrealized,
+            },
+            recentActivity: this.readHermesActivityEntries(),
+            profile: {
+              blofinApiOk: true,
+              blofinApiKnown: true,
+              blofinApiFresh: true,
+              blofinMonitoringSuspended: false,
+            },
+          },
+        };
+      }
       return result;
     }
 
     const data = result.data;
-    if (!data.balances || typeof data.balances !== 'object') {
-      data.balances = {};
+    if (!data.balances || typeof data.balances !== 'object') data.balances = {};
+
+    const deskEquity = Number(data.balances.totalEquity);
+    const deskHasPositions = Array.isArray(data.openPositions) && data.openPositions.length > 0;
+    const deskHasClosed = Array.isArray(data.recentClosed) && data.recentClosed.length > 0;
+
+    if (live?.ok) {
+      this.applyLiveProprSnapshot(data, live);
+      const mappedOpen = live.mappedOpenPositions || mapProprOpenPositions(live.openPositions || []);
+      const mappedClosed = live.mappedClosedPositions || mapProprClosedPositions(live.closedPositions || []);
+      if (mappedOpen.length > 0 || !deskHasPositions) {
+        data.openPositions = mappedOpen;
+        data.openPositionsUnavailable = false;
+        if (data.errorMessage && /open positions/i.test(String(data.errorMessage))) {
+          data.errorMessage = '';
+        }
+      }
+      if (mappedClosed.length > 0 || !deskHasClosed) {
+        data.recentClosed = mappedClosed;
+        data.closedTrades48h = mappedClosed.filter(
+          (row) => row.closedAt && row.closedAt >= Date.now() - 48 * 60 * 60 * 1000,
+        );
+      }
+      if (!data.exposure || typeof data.exposure !== 'object') data.exposure = {};
+      if (live.openCount > 0 || !deskHasPositions) {
+        data.exposure.openCount = live.openCount;
+        data.exposure.totalMargin = live.totalMargin;
+        data.exposure.totalUnrealized = live.totalUnrealized;
+      }
     }
-    this.applyLiveCoinbaseBalances(data);
+
     const accountRows = Array.isArray(data.balances.account) ? data.balances.account : [];
     const liveAvailable = this.liveAvailableFromSnapshot(data);
     if (!(Number(data.balances.totalAvailable) > 0) && liveAvailable > 0) {
@@ -935,7 +1022,6 @@ class BlohunterBridge {
       }
     }
 
-    // Flaky positions reads should not red-banner a desk that already has equity.
     if (
       data.errorMessage &&
       /open positions/i.test(String(data.errorMessage)) &&
@@ -1123,7 +1209,7 @@ class BlohunterBridge {
       ) {
         await this.refreshGatewaySignal('trading-tab-resync');
       }
-      await this.refreshLiveCoinbaseAccount();
+      await this.refreshLiveProprAccount();
       this.startLiveAccountPoll();
       runSeed();
       return { ok: true, url: this.getDashboardUrl(), already: true };
@@ -1141,7 +1227,7 @@ class BlohunterBridge {
       this.startDesktopGateKeeper();
       this.startHandshakeWatchdog();
       this.ensureGrowthChartLayout();
-      await this.refreshLiveCoinbaseAccount();
+      await this.refreshLiveProprAccount();
       this.started = true;
       this.startLiveAccountPoll();
       runSeed();
@@ -1183,18 +1269,22 @@ class BlohunterBridge {
   }
 
   getStatus() {
+    const fromLive = this.livePropr?.mappedOpenPositions;
+    const openPositions = (Array.isArray(fromLive) && fromLive.length)
+      ? fromLive
+      : (Array.isArray(this.lastKnownOpenPositions) ? this.lastKnownOpenPositions : []);
     return {
       started: this.started,
       backgroundReady: this.backgroundReady,
       connectRoot: this.connectRoot,
       dashboardUrl: this.getDashboardUrl(),
       sseConnected: this.sse?.isConnected?.() || false,
-      openPositions: Array.isArray(this.lastKnownOpenPositions) ? this.lastKnownOpenPositions : [],
+      openPositions,
     };
   }
 
   injectDashboardHtml(html) {
-    html = html.replace(/<title>BloHunter Connect<\/title>/i, '<title>KnightTrader</title>');
+    html = html.replace(/<title>BloHunter Connect<\/title>/i, '<title>KnightTrader Propr</title>');
     if (!html.includes('__kt__/chrome-shim.js')) {
       html = html.replace(
         /<head([^>]*)>/i,
