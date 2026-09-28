@@ -2103,153 +2103,79 @@ async function getDashboardStatus() {
 }
 
 // ── Cron configuration ─────────────────────────────────────────────────────
-function buildCronLearningHeader() {
-  return `LEARNING ACROSS CRON TICKS (READ FIRST)
-Each cron run is a fresh session. Do not assume chat memory from prior ticks.
-Before trading: read your durable learning artifacts (skills / memory / lessons files under ${HERMES_HOME} and any project lessons files) and apply them.
-If lessons say a setup type loses, respect that. If lessons say a setup type wins, bias toward it only when live structure still confirms.
-Learning that stays only in this turn's reply is wasted — you must use durable files.`;
-}
-
-function buildCronLearningFooter() {
-  return `LEARNING ACROSS CRON TICKS (WRITE BEFORE YOU FINISH)
-After this cycle: write what worked, what failed, and the exact reusable rule into a durable skill or lessons file under ${HERMES_HOME}.
-Include: symbol/setup type, long or short, why taken or skipped, outcome if known, and the next-tick rule.
-Next tick must be able to load and use those updated lessons with no chat history.
-If nothing material changed, still append a one-line "hold / no edge" note with timestamp.`;
-}
-
-function buildCronProprAuthBlock(compPath) {
-  const accountId = storeData.propr?.accountId || '<resolve via GET /challenge-attempts?status=active>';
-  return `--- PROPR PERPETUAL FUTURES — AUTH & API ---
-CREDENTIALS
-Use exactly: ${compPath}
-Propr API keys start with pk_live_. Generate at app.propr.xyz/settings.
-All private REST calls use base URL: ${PROPR_REST_URL}
-Header on every request: X-API-Key: <pk_live_...>
-No VPN, browser fingerprint, or WAF bypass required — plain HTTPS only.
-
-RESOLVE ACCOUNT
-GET /challenge-attempts?status=active → read accountId from active attempt
-Cached accountId for this install: ${accountId}
-
-KEY ENDPOINTS
-GET  /users/me                                          — verify API key
-GET  /accounts/{accountId}                              — balance, margin, equity
-GET  /accounts/{accountId}/positions?status=open        — open positions
-GET  /accounts/{accountId}/positions?status=closed      — closed positions
-GET  /accounts/{accountId}/trades                       — trade history
-POST /accounts/{accountId}/orders                       — place order (LIVE MODE ONLY)
-
-Minimum notional and symbol rules: read product metadata from Propr docs before placing orders.
-TP/SL: attach stop/take-profit per Propr order schema when placing entries.`;
-}
-
-function buildCronPaperTradingBlock(paperStartingValue, ledgerPath) {
-  return `--- PAPER / MENTAL TRADING MODE (ACTIVE) ---
-IMPORTANT: Coinbase does NOT offer a demo/sandbox perpetual futures account. There is no virtual-funds API to trade against.
-When paper mode is enabled, you take MENTAL TRADES ONLY — simulated positions recorded in a durable ledger file. You still use the LIVE Coinbase API for auth verification and live market prices, but you must NEVER submit POST /api/v3/brokerage/orders while paper mode is active.
-
-PAPER STARTING EQUITY: ${paperStartingValue} USDC
-MENTAL LEDGER (single source of truth): ${ledgerPath}
-Read this JSON file at the start of every tick. Write it back at the end with all updates.
-
-LEDGER SCHEMA (maintain all fields):
-{
-  "startingEquity": number,
-  "currentEquity": number,
-  "availableBalance": number,
-  "marginUsed": number,
-  "realizedPnl": number,
-  "unrealizedPnl": number,
-  "totalFeesPaid": number,
-  "peakEquity": number,
-  "feeSchedule": { "makerBps": number, "takerBps": number, "source": string, "lastFetchedAt": string|null },
-  "openPositions": [{ id, symbol, side, entryPrice, size, notional, margin, entryFee, openedAt, stopLoss, takeProfit, lastMarkPrice, unrealizedPnl }],
-  "closedTrades": [{ id, symbol, side, entryPrice, exitPrice, size, notional, realizedPnl, entryFee, exitFee, openedAt, closedAt, exitReason }],
-  "equityHistory": [{ at, equity, note }],
-  "authChecks": [{ at, ok, accountsOk, previewOk, feeTierOk, detail }]
-}
-
-EVERY TICK — REQUIRED ORDER:
-1) LIVE AUTH VERIFICATION (no real orders):
-   a) GET /api/v3/brokerage/accounts → must return JSON (proves CDP JWT works on live path).
-   b) GET /api/v3/brokerage/transaction_summary → read your fee tier; update feeSchedule.makerBps and feeSchedule.takerBps (convert % to basis points: 0.40% → 40 bps). If unavailable, keep defaults maker=${DEFAULT_MAKER_FEE_BPS} taker=${DEFAULT_TAKER_FEE_BPS} bps and note source=default.
-   c) POST /api/v3/brokerage/orders/preview with a tiny hypothetical market order → confirms live order authorization path works. DO NOT call POST /orders.
-   Append result to ledger.authChecks[] with ISO timestamp.
-
-2) LOAD LEDGER → mark open mental positions to market using live prices from GET /api/v3/brokerage/products/{product_id} (use mid of bid/ask or last trade price).
-
-3) MENTAL TRADING (if edge exists):
-   - Simulate entries/exits in ledger only. Never place real orders.
-   - Size from ledger.currentEquity (risk 1–2% per trade), not live account balance.
-   - Min notional >= 10 USDC. Max 2 concurrent mental positions. Isolated margin logic in ledger.
-   - Market entry/exit = taker fee. Resting limit fill = maker fee.
-   - Fee formula: fee_usdc = abs(notional) * (feeBps / 10000)
-   - On mental entry: reduce availableBalance by margin + entry fee; add openPositions row.
-   - On mental exit: realize PnL, apply exit fee, release margin, move row to closedTrades.
-   - Reconcile each tick:
-     currentEquity = startingEquity + realizedPnl + unrealizedPnl - totalFeesPaid
-     availableBalance = currentEquity - marginUsed (for open positions)
-     peakEquity = max(peakEquity, currentEquity)
-   - Append equityHistory point when equity changes materially or a trade opens/closes.
-
-4) SCOREBOARD (paper):
-   - Grow the mental equity curve responsibly from ${paperStartingValue} USDC baseline.
-   - Hard stop: pause new mental entries after 3 consecutive closed losses OR 4% drawdown from peakEquity.
-   - Report in cycle output: currentEquity, availableBalance, open mental positions, last auth check status.
-
-SUCCESS CRITERIA (paper mode):
-- Live auth checks pass (accounts JSON + preview OK) — proves live trading could work when user disables paper mode.
-- Ledger currentEquity accurately reflects mental PnL and fees vs starting ${paperStartingValue} USDC.
-- No real orders submitted.`;
-}
-
-function buildCronLiveTradingBlock() {
-  return `--- LIVE TRADING MODE (ACTIVE) ---
-You place REAL orders on Propr-funded perpetual futures via POST /accounts/{accountId}/orders.
-Use live account equity from GET /accounts/{accountId} for sizing.
-
-TRADING FLOW
-1. Prove auth with GET /users/me and GET /accounts/{accountId}.
-2. GET /accounts/{accountId}/positions?status=open → check exposure; max 2 concurrent.
-3. Scan liquid perpetual pairs for momentum/structure/volume confluence. Enter only when 2+ factors align.
-4. Size for >= 10 USDC notional and 1–2% risk. Attach TP/SL immediately.
-5. Hard stop after 3 consecutive losses or 4% max drawdown.
-
-SUCCESS CRITERIA (live):
-- GET /accounts/{accountId} returns JSON with USDC balance.
-- Open/closed positions endpoints return JSON.
-- Manual orders show on Propr with correct TP/SL behavior.`;
-}
-
 function buildCronPrompt() {
   const compPath = getCompendiumPath();
-  const modeBlock = buildCronLiveTradingBlock();
+  const accountId = storeData.propr?.accountId
+    || '<resolve via GET /challenge-attempts?status=active>';
+  const lessonsDir = path.join(HERMES_HOME, 'lessons');
+  const lessonsFile = path.join(lessonsDir, 'propr_challenge.md');
+  const stateFile = path.join(lessonsDir, 'propr_state.json');
 
-  return `${buildCronLearningHeader()}
+  return `[IMPORTANT: You are running as a scheduled cron job. DELIVERY: Your final response will be automatically delivered to the user — do NOT use send_message or try to deliver the output yourself. SILENT: If there is genuinely nothing new to report (no order placed, moved, closed, or changed, no error, no rule hit), respond with exactly "[SILENT]" and nothing else. Never combine [SILENT] with content.]
 
-MISSION
-You are Hermes on a local cron. You are the analyst, the risk manager, and the only process that places trades. Scan Propr perpetual futures, decide, place the order yourself, attach TP/SL, and manage the position. Zero order-placing scripts, zero scanners that submit orders, zero "run agent" wrappers.
+=== PROPR CHALLENGE ($5K TURBO 1-STEP) — 5-MIN AUTONOMOUS TRADING CRON v2 (copy-paste ready, replaces all earlier versions) ===
 
-NUMBER ONE OBJECTIVE
-Protect existing equity and keep the equity curve vertical. Cash is a position. If no setup clears a reward-to-risk of at least 2.5, stay in cash.
+ACCOUNT + CREDENTIALS
+  Read Propr API key from compendium: ${compPath}
+  Or from Hermes env var PROPR_API_KEY (synced on Save in Setup).
+  ACCOUNT_ID = ${accountId}
+  Base URL: ${PROPR_REST_URL}    Header on every call: X-API-Key: <PROPR_API_KEY>
+  Plain Python \`requests\` works. No signing, no browser.
+  Docs/SDK if unsure: https://github.com/XBorgLabs/propr-docs (docs/api.md, python/propr_sdk.py)
 
-OPERATING RULES
-- Transport is plain HTTPS to ${PROPR_REST_URL}. Propr does not need a VPN, a browser fingerprint, or a WAF bypass.
-- Isolated margin only. Longs and shorts both allowed. Maximum 2 concurrent positions.
-- Risk 1–2% of equity per trade. Minimum notional is 10 USDC. Reject any setup below 2.5 reward-to-risk.
-- Hard stop: no new entries after 3 consecutive losses or a 4% drawdown from peak equity.
-- Read durable lessons under ${HERMES_HOME} at the start of every tick and write the updated rules back before you finish.
+CHALLENGE RULES (breaking ANY = challenge lost)
+  Start 5000 USDC. PASS when equity >= 5450. Then place NO new trades and report "TARGET HIT".
+  FAIL if equity touches 4850 (static).
+  FAIL if equity falls 3% below that day's starting balance (assume the day resets 00:00 UTC).
+  Banned: latency arbitrage, tick sniping, price-feed exploits, cross-account hedging, order spam. Bots/AI are allowed.
 
-${buildCronProprAuthBlock(compPath)}
+ENDPOINTS
+  GET  /challenge-attempts -> data[0].status, data[0].account.balance, .totalUnrealizedPnl  (equity = balance + totalUnrealizedPnl)
+  GET  /accounts/{ACCOUNT_ID}/positions
+  GET  /accounts/{ACCOUNT_ID}/orders          (check status "open" for resting stops)
+  POST /accounts/{ACCOUNT_ID}/orders          body {"orders":[ONE order]}
+  POST /accounts/{ACCOUNT_ID}/orders/{orderId}/cancel   (200/201 = ok, 400 = already gone, ignore)
+  Every order needs: intentId (a NEW ULID each order), exchange "hyperliquid", productType "perp", asset "SOL", base "SOL", quote "USDC", side, positionSide ("long"/"short"), type, quantity (string), timeInForce, reduceOnly, closePosition.
+  Entry: type "market", timeInForce "IOC", reduceOnly false.
+  Stop: type "stop_market", positionId = the open position's id, triggerPrice, quantity = full position size, reduceOnly true, closePosition true, timeInForce "GTC". Side is the opposite of the position (sell for long, buy for short).
+  Market close: type "market", reduceOnly true, closePosition true, quantity = full position size.
+  Candles (public, no key): POST https://api.hyperliquid.xyz/info  {"type":"candleSnapshot","req":{"coin":"SOL","interval":"1h","startTime":<ms>,"endTime":<ms>}}; same with "4h". Use only COMPLETED candles (drop the one still forming). Get about 300 bars of each.
+  SOL size decimals: read from POST https://api.hyperliquid.xyz/info {"type":"meta"} (szDecimals for SOL). Round quantity DOWN to it.
 
-${modeBlock}
+STRATEGY v2 (the only strategy; SOL only, one position at a time)
+  Indicators, all on completed bars:
+    ATR14 on 1h: Wilder ATR (TR = max(H-L, |H-prevC|, |L-prevC|), RMA smoothing, period 14).
+    HH20 / LL20: highest high / lowest low of the 20 completed 1h bars BEFORE the latest closed bar.
+    4h Supertrend: ATR period 10 (Wilder), multiplier 3.0, hl2 basis, standard band-ratchet rules. Direction +1 (up) or -1 (down) as of the latest COMPLETED 4h bar.
+  Only act on a NEW closed 1h bar (compare its open time to last_candle_t in the state file).
+  LONG signal: latest 1h close > HH20, AND the bar before it did NOT close above its own prior-20-bar high (first breakout only), AND 4h Supertrend = +1.
+  SHORT signal: latest 1h close < LL20, AND the bar before it did NOT close below its own prior-20-bar low, AND 4h Supertrend = -1.
+  Initial stop: signal bar close - 2.0*ATR14 (long) / + 2.0*ATR14 (short).
+  NO take-profit.
+  Trailing stop: after EVERY new closed 1h bar while in a trade, candidate = highest high since entry - 3.0*ATR14 (long) / lowest low since entry + 3.0*ATR14 (short), using the ATR14 of the bar just closed. If the candidate is tighter than the current stop AND still on the correct side of the last close: place the NEW stop first, confirm it is open, THEN cancel the old stop. Never loosen a stop. Never leave the position without a stop.
+  Time exit: if still open after 96 closed 1h bars since entry, close at market.
 
-PROCEED NOW
-Confirm credentials from the compendium → prove a JSON account read → size from live equity → scan liquid perpetuals → take the trade by hand only when the edge clears the rules → attach TP/SL → keep the equity curve vertical.
+SIZING
+  risk_usd = 1% of balance (about $50), capped at 0.5 * (balance - max(4850, 0.97 * balance at 00:00 UTC)).
+  qty = risk_usd / (|entry - stop| + entry*0.0016), rounded DOWN to SOL size decimals.
+  Notional (qty*price) must never exceed 10x balance. Leverage on SOL is fine up to 10x; set margin to cross.
+  Do not open trades if balance < 4875 or equity >= 5450, or if today's loss is already 1.5% or more (wait for the next UTC day).
 
-${buildCronLearningFooter()}`;
+EACH RUN, IN THIS ORDER
+  1) Read the state + lessons files. GET /challenge-attempts. If status is not "active", report it and do nothing else. Compute equity, today's start balance (save at the first run after 00:00 UTC), today's P/L.
+  2) GET positions and open orders. SAFETY: every open position MUST have a reduceOnly stop_market. If missing, place it NOW (use the stored stop, or 2*ATR14 from the current price). If a position has closed, cancel its leftover stop orders and log the result.
+  3) If a position is open and a new 1h bar closed: update the trailing stop; check the 96-bar time exit.
+  4) If flat, a new 1h bar closed, and a signal fires: place the market entry, confirm the fill in positions, then immediately place the stop. If the stop fails, close the position at market at once.
+  5) Save state (last_candle_t, today_date, today_start_balance, open_trade {side, entry, stop, qty, opened_at, positionId, stop_orderId, extreme}) and append a line to the lessons file.
+
+FILES (create if missing)
+  ${lessonsFile}
+  ${stateFile}
+
+LEARNING RULES
+  Log every trade (time, side, entry, stop moves, exit, P/L in $ and R, reason). You may write lessons, but do NOT change the strategy, indicators, or parameters until at least 30 closed trades are logged, and then only by suggesting the change in your report for the user to approve. NEVER change or remove: the stop on every position, the loss limits, the sizing caps, SOL-only, one position at a time. No other coins, no scalping, no new strategies mid-challenge. No trade is better than a bad trade.
+
+REPORT (only when not silent): equity, today's P/L, open position (side, entry, current stop), action taken, distance to 5450 and to 4850.`;
 }
 
 async function configureCron() {

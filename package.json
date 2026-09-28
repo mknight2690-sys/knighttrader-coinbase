@@ -1,6 +1,6 @@
 {
   "name": "knight-trader-propr",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "description": "KnightTrader Propr — Hermes credential manager & launcher",
   "main": "main.js",
   "scripts": {
