@@ -1323,25 +1323,41 @@ function syncHermesConfig() {
   }
 }
 
-async function syncHermesCredentials(token, { restartGateway = false } = {}) {
+async function syncHermesCredentials(token, { restartGateway = false, requirePropr = false } = {}) {
+  bootstrapNvidiaKeyFromDocuments();
+  const model = normalizeNousModel(storeData.nous?.model || DEFAULT_NOUS_MODEL);
+  const inf = resolveInferenceForModel(model);
   const nousKey = resolveNousApiKey();
-  if (!nousKey) {
+  const nvidiaKey = String(storeData.nvidia?.apiKey || '').trim();
+  const propr = storeData.propr || {};
+  const proprKey = String(propr.apiKey || '').trim();
+
+  if (requirePropr && !proprKey) {
+    return { ok: false, msg: 'Propr API key not set — open Setup, enter your pk_live_ key, and Save.' };
+  }
+  if (inf.provider === 'nvidia' && !nvidiaKey) {
+    return {
+      ok: false,
+      msg: 'NVIDIA API key not set — save in Setup or place Nvidia API Key.txt in Documents.',
+    };
+  }
+  if (inf.provider === 'nous' && !nousKey) {
     return { ok: false, msg: 'Nous Portal API key not set — open Setup tab, enter your key, and Save.' };
   }
-  if (!String(storeData.nous?.apiKey || '').trim()) {
+  if (!String(storeData.nous?.apiKey || '').trim() && nousKey) {
     storeData.nous = { ...(storeData.nous || {}), apiKey: nousKey };
   }
 
   fs.mkdirSync(HERMES_HOME, { recursive: true });
   const envPath = getHermesEnvPath();
   const before = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
-  let after = upsertEnvVar(before, 'NOUS_API_KEY', nousKey);
-  after = upsertEnvVar(after, 'NOUSRESEARCH_API_KEY', nousKey);
-  const nvidiaKey = String(storeData.nvidia?.apiKey || '').trim();
+  let after = before;
+  if (nousKey) {
+    after = upsertEnvVar(after, 'NOUS_API_KEY', nousKey);
+    after = upsertEnvVar(after, 'NOUSRESEARCH_API_KEY', nousKey);
+  }
   if (nvidiaKey) after = upsertEnvVar(after, 'NVIDIA_API_KEY', nvidiaKey);
-
-  const propr = storeData.propr || {};
-  if (propr.apiKey) after = upsertEnvVar(after, 'PROPR_API_KEY', propr.apiKey);
+  if (proprKey) after = upsertEnvVar(after, 'PROPR_API_KEY', proprKey);
   if (propr.accountId) after = upsertEnvVar(after, 'PROPR_ACCOUNT_ID', propr.accountId);
 
   if (after !== before) {
@@ -1353,10 +1369,9 @@ async function syncHermesCredentials(token, { restartGateway = false } = {}) {
 
   if (token) {
     const envVars = {
-      NOUS_API_KEY: nousKey,
-      NOUSRESEARCH_API_KEY: nousKey,
+      ...(nousKey ? { NOUS_API_KEY: nousKey, NOUSRESEARCH_API_KEY: nousKey } : {}),
       ...(nvidiaKey ? { NVIDIA_API_KEY: nvidiaKey } : {}),
-      ...(propr.apiKey ? { PROPR_API_KEY: propr.apiKey } : {}),
+      ...(proprKey ? { PROPR_API_KEY: proprKey } : {}),
       ...(propr.accountId ? { PROPR_ACCOUNT_ID: propr.accountId } : {}),
     };
     for (const [keyName, value] of Object.entries(envVars)) {
@@ -2224,10 +2239,10 @@ async function configureCron() {
     }
   }
 
-  const sync = await syncHermesCredentials(token, { restartGateway: true });
+  const sync = await syncHermesCredentials(token, { restartGateway: true, requirePropr: true });
   if (!sync.ok) {
     appendLog(`⚠ configureCron: credential sync failed: ${sync.msg || sync.error || 'unknown'}`, 'warn');
-    return { ok: false, msg: sync.msg, prompt: buildCronPrompt() };
+    return { ok: false, msg: sync.msg || 'Credential sync failed.', prompt: buildCronPrompt() };
   }
   appendLog('🔧 configureCron: credential sync complete', 'info');
 
@@ -2548,21 +2563,30 @@ ipcMain.on('window-close', () => {
 let mainWindow = null;
 let appTray = null;
 
+function loadTrayIcon() {
+  const assetDir = path.join(__dirname, 'assets');
+  const candidates = [
+    path.join(assetDir, 'icon.jpg'),
+    path.join(assetDir, 'icon.png'),
+    path.join(assetDir, 'tray-icon.png'),
+    path.join(assetDir, 'icon.ico'),
+  ];
+  for (const iconPath of candidates) {
+    if (!fs.existsSync(iconPath)) continue;
+    let img = nativeImage.createFromPath(iconPath);
+    if (img.isEmpty()) continue;
+    const { width, height } = img.getSize();
+    if (width > 32 || height > 32) {
+      img = img.resize({ width: 16, height: 16, quality: 'best' });
+    }
+    return img;
+  }
+  return nativeImage.createEmpty();
+}
+
 function createTray() {
   if (appTray) return appTray;
-  let iconPath = path.join(__dirname, 'assets', 'icon.ico');
-  if (!fs.existsSync(iconPath)) {
-    const fallbackPath = path.join(app.getPath('temp'), 'knighttrader-propr-tray.png');
-    try {
-      const img = nativeImage.createEmpty();
-      const buf = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGwAAABTSURBVGhD7c4BDQAwDASh+qev/TZtA5uTOq8k51xmzpm1sWZs6p2TmjOZNmdNZs5k2pw1mTmTZ3PWZPJsbs1kZsz/ZjIlMzN+ze8A3YB4qBYXrUQAAAAASUVORK5CYII=');
-      fs.writeFileSync(fallbackPath, buf, 'base64');
-      iconPath = fallbackPath;
-    } catch {
-      iconPath = '';
-    }
-  }
-  const trayIcon = iconPath ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty();
+  const trayIcon = loadTrayIcon();
   appTray = new Tray(trayIcon);
   const contextMenu = Menu.buildFromTemplate([
     { label: 'Show', click: () => restoreMainWindow() },
