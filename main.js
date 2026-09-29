@@ -2629,19 +2629,9 @@ ipcMain.handle('bh-storage-remove-session', (_e, keys) => {
   return getBlohunterBridge().storage.removeArea('session', keys);
 });
 
-ipcMain.on('window-minimize', () => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.hide();
-    createTray();
-  }
-});
+ipcMain.on('window-minimize', () => hideMainWindowToTray());
 ipcMain.on('window-maximize', () => mainWindow?.isMaximized() ? mainWindow.restore() : mainWindow?.maximize());
-ipcMain.on('window-close', () => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.hide();
-    createTray();
-  }
-});
+ipcMain.on('window-close', () => hideMainWindowToTray());
 
 let mainWindow = null;
 let appTray = null;
@@ -2681,12 +2671,60 @@ function createTray() {
   return appTray;
 }
 
+function hideMainWindowToTray() {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+  createTray();
+  try {
+    win.setSkipTaskbar(true);
+  } catch (_) {}
+  win.hide();
+}
+
+function wakeWindowContents(win) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    win.webContents.setBackgroundThrottling(false);
+    win.webContents.invalidate();
+  } catch (_) {}
+  for (const wc of webContents.getAllWebContents()) {
+    if (wc.isDestroyed() || wc.id === win.webContents.id) continue;
+    try {
+      wc.setBackgroundThrottling(false);
+    } catch (_) {}
+  }
+  try {
+    win.webContents.send('window-restored');
+  } catch (_) {}
+}
+
 function restoreMainWindow() {
   const win = mainWindow || BrowserWindow.getAllWindows()[0];
   if (!win || win.isDestroyed()) return;
-  if (win.isMinimized()) win.restore();
-  if (!win.isVisible()) win.show();
-  win.focus();
+
+  const showWindow = () => {
+    if (win.isDestroyed()) return;
+    try {
+      win.setSkipTaskbar(false);
+    } catch (_) {}
+
+    if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
+
+    if (process.platform === 'win32') {
+      // Tray context menus steal focus on Windows; this brings the frame back alive.
+      win.setAlwaysOnTop(true, 'screen-saver');
+      win.focus();
+      win.setAlwaysOnTop(false);
+    } else {
+      win.focus();
+    }
+
+    wakeWindowContents(win);
+  };
+
+  // Defer until the tray menu closes so Show does not restore a frozen frame.
+  setTimeout(showWindow, process.platform === 'win32' ? 120 : 0);
 }
 
 function createWindow() {
@@ -2711,17 +2749,15 @@ function createWindow() {
   mainWindow.center();
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.once('ready-to-show', () => { mainWindow.show(); mainWindow.focus(); });
-  mainWindow.on('minimize', () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.hide();
-      createTray();
-    }
+  mainWindow.on('minimize', (event) => {
+    event.preventDefault();
+    hideMainWindowToTray();
   });
+  mainWindow.on('show', () => wakeWindowContents(mainWindow));
   mainWindow.on('close', (event) => {
     if (!app.isQuitting) {
       event.preventDefault();
-      mainWindow?.hide();
-      createTray();
+      hideMainWindowToTray();
     }
   });
   mainWindow.on('closed', () => { stopHermesDashboard(); mainWindow = null; });

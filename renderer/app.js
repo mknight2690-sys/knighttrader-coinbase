@@ -534,6 +534,16 @@ function syncWebviewParking(activeTab) {
   parkWebview(el.hermesWebview, activeTab !== 'hermes');
 }
 
+function wakeEmbeddedWebviews() {
+  syncWebviewParking(currentTab);
+  if (currentTab === 'trading' && el.tradingWebview) {
+    attachTradingGuest(el.tradingWebview);
+  }
+  try {
+    window.dispatchEvent(new Event('resize'));
+  } catch (_) {}
+}
+
 function attachTradingGuest(webview) {
   if (!webview) return;
   try {
@@ -1089,6 +1099,13 @@ window.kt.onUpdateStatus((payload) => {
     showUpdateBanner('Update check failed', message, false);
     if (btnCheckUpdates) btnCheckUpdates.disabled = false;
   }
+});
+
+if (window.kt?.onWindowRestored) {
+  window.kt.onWindowRestored(() => wakeEmbeddedWebviews());
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') wakeEmbeddedWebviews();
 });
 
 // ── Boot ─────────────────────────────────────────────────────

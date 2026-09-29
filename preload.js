@@ -74,6 +74,8 @@ contextBridge.exposeInMainWorld('kt', {
 
   onFreeModelSelected: (cb) => ipcRenderer.on('kt-free-model-selected', (_e, info) => cb(info)),
 
+  onWindowRestored: (cb) => ipcRenderer.on('window-restored', () => cb()),
+
   autoSelectFreeModel: () => ipcRenderer.invoke('auto-select-free-model'),
 
 
