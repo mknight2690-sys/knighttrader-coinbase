@@ -367,7 +367,6 @@ html, body {
 }
 
 .ai-icon { background: rgba(88,166,255,0.12); border-color: rgba(88,166,255,0.3); color: var(--blue); }
-.nvidia-icon { background: rgba(118,185,0,0.12); border-color: rgba(118,185,0,0.35); color: #9bd936; }
 .propr-icon { background: rgba(124,58,237,0.12); border-color: rgba(124,58,237,0.3); color: #a78bfa; }
 .coinbase-icon { background: rgba(124,58,237,0.12); border-color: rgba(124,58,237,0.3); color: #a78bfa; }
 .hermes-icon { background: rgba(61,214,140,0.12); border-color: rgba(61,214,140,0.3); color: var(--good); }

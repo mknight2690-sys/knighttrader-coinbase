@@ -25,16 +25,6 @@ protocol.registerSchemesAsPrivileged([
 const NOUS_INFERENCE_URL = 'https://inference-api.nousresearch.com/v1/chat/completions';
 const NOUS_INFERENCE_BASE = 'https://inference-api.nousresearch.com/v1';
 const NOUS_RECOMMENDED_MODELS_URL = 'https://portal.nousresearch.com/api/nous/recommended-models';
-const NVIDIA_INFERENCE_BASE = 'https://integrate.api.nvidia.com/v1';
-const NVIDIA_INFERENCE_URL = `${NVIDIA_INFERENCE_BASE}/chat/completions`;
-
-// NVIDIA NIM free models (pengsonal / build.nvidia.com) — benchmark score orders auto-ping (best first).
-const NVIDIA_BENCHMARK_MODELS = [
-  { id: 'moonshotai/kimi-k3', label: 'Kimi K3 (NVIDIA NIM · free)', benchmark: 100 },
-  { id: 'z-ai/glm-5.3', label: 'GLM 5.3 (NVIDIA NIM · free)', benchmark: 95 },
-  { id: 'deepseek-ai/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash (NVIDIA NIM · free)', benchmark: 90 },
-  { id: 'z-ai/glm-5.3-flash', label: 'GLM 5.3 Flash (NVIDIA NIM · free)', benchmark: 85 },
-];
 const DASHBOARD_PORT = 9130;
 const DASHBOARD_URL = `http://127.0.0.1:${DASHBOARD_PORT}`;
 
@@ -85,7 +75,6 @@ const FALLBACK_PAID_NOUS_MODELS = [
 
 const DEFAULTS = {
   propr: { apiKey: '', accountId: '' },
-  nvidia: { apiKey: '' },
   nous: { apiKey: '', model: DEFAULT_NOUS_MODEL },
   settings: { notifySounds: true },
 };
@@ -101,6 +90,9 @@ const LEGACY_NOUS_MODELS = {
   'nvidia/nemotron-3-ultra-550b-a55b:free': 'meituan/longcat-2.0:free',
   'inclusionai/ring-2.6-1t:free': 'stepfun/step-3.7-flash:free',
   'deepseek/deepseek-v4-flash-free': 'tencent/hy3:free',
+  'z-ai/glm-5.3': 'z-ai/glm-5.2',
+  'z-ai/glm-5.3-flash': 'stepfun/step-3.7-flash:free',
+  'deepseek-ai/deepseek-v4.1-flash': 'tencent/hy3:free',
 };
 
 function normalizeNousModel(value) {
@@ -122,8 +114,7 @@ function migrateStoreData(raw) {
     accountId: String(merged.propr.accountId || '').trim(),
   };
   delete merged.coinbase;
-  if (!merged.nvidia) merged.nvidia = { apiKey: '' };
-  merged.nvidia = { apiKey: String(merged.nvidia.apiKey || '').trim() };
+  delete merged.nvidia;
   if (merged.nous) {
     merged.nous = {
       apiKey: merged.nous.apiKey || '',
@@ -133,42 +124,7 @@ function migrateStoreData(raw) {
   return merged;
 }
 
-function bootstrapNvidiaKeyFromDocuments() {
-  if (String(storeData.nvidia?.apiKey || '').trim()) return false;
-  const candidates = [
-    path.join(os.homedir(), 'OneDrive', 'Documents', 'Nvidia API Key.txt'),
-    path.join(os.homedir(), 'Documents', 'Nvidia API Key.txt'),
-    path.join(os.homedir(), 'Downloads', 'Nvidia API Key.txt'),
-  ];
-  for (const filePath of candidates) {
-    try {
-      if (!fs.existsSync(filePath)) continue;
-      const key = fs.readFileSync(filePath, 'utf8').trim();
-      if (!/^nvapi-/i.test(key)) continue;
-      storeData.nvidia = { apiKey: key };
-      saveStore(storeData);
-      appendLog(`🔑 Loaded NVIDIA API key from ${filePath}`, 'success');
-      return true;
-    } catch {}
-  }
-  return false;
-}
-
-function isNvidiaModel(modelId) {
-  const id = String(modelId || '').trim();
-  return NVIDIA_BENCHMARK_MODELS.some((m) => m.id === id);
-}
-
-function resolveInferenceForModel(modelId) {
-  if (isNvidiaModel(modelId)) {
-    return {
-      provider: 'nvidia',
-      baseUrl: NVIDIA_INFERENCE_BASE,
-      chatUrl: NVIDIA_INFERENCE_URL,
-      apiKeyEnv: 'NVIDIA_API_KEY',
-      pingTimeoutMs: 120000,
-    };
-  }
+function resolveInferenceForModel(_modelId) {
   return {
     provider: 'nous',
     baseUrl: NOUS_INFERENCE_BASE,
@@ -178,11 +134,8 @@ function resolveInferenceForModel(modelId) {
   };
 }
 
-function resolveApiKeyForModel(modelId, nousKeyOverride = '', nvidiaKeyOverride = '') {
+function resolveApiKeyForModel(modelId, nousKeyOverride = '') {
   const inf = resolveInferenceForModel(modelId);
-  if (inf.provider === 'nvidia') {
-    return { ...inf, apiKey: String(nvidiaKeyOverride || storeData.nvidia?.apiKey || '').trim() };
-  }
   return { ...inf, apiKey: String(nousKeyOverride || storeData.nous?.apiKey || '').trim() };
 }
 
@@ -286,9 +239,8 @@ function applyCredentialMapping(target, kv) {
       set('nous', 'apiKey', value);
     } else if (key === 'nous_model' || key === 'nouse_model') {
       set('nous', 'model', normalizeNousModel(value));
-    } else if (key === 'propr_api_key' || key === 'api_key' || key === 'x_api_key') set('propr', 'apiKey', value);
+    }     else if (key === 'propr_api_key' || key === 'api_key' || key === 'x_api_key') set('propr', 'apiKey', value);
     else if (key === 'propr_account_id' || key === 'account_id') set('propr', 'accountId', value);
-    else if (key === 'nvidia_api_key' || key === 'nvapi_key') set('nvidia', 'apiKey', value);
   }
 }
 
@@ -303,11 +255,6 @@ function finalizeNousCredentials(parsed, text) {
     const pkLine = lines.find((line) => /^pk_live_/i.test(line));
     if (pkLine) parsed.propr.apiKey = pkLine.trim();
   }
-  if (!parsed.nvidia.apiKey) {
-    const nvLine = lines.find((line) => /^nvapi-/i.test(line));
-    if (nvLine) parsed.nvidia.apiKey = nvLine.trim();
-  }
-
   if (parsed.nous.apiKey) return;
 
   for (const line of lines) {
@@ -321,6 +268,7 @@ function finalizeNousCredentials(parsed, text) {
   const rawLines = lines.filter((line) => !/[:=]/.test(line));
   for (const line of rawLines) {
     if (/^pk_live_/i.test(line)) continue;
+    if (/^nvapi-/i.test(line)) continue;
     if (looksLikeApiKey(line)) {
       parsed.nous.apiKey = line;
       return;
@@ -352,9 +300,6 @@ function mergeCredentialObjects(target, source) {
     if (source.propr.apiKey) target.propr.apiKey = String(source.propr.apiKey).trim();
     if (source.propr.accountId) target.propr.accountId = String(source.propr.accountId).trim();
   }
-  if (source.nvidia && typeof source.nvidia === 'object') {
-    if (source.nvidia.apiKey) target.nvidia.apiKey = String(source.nvidia.apiKey).trim();
-  }
   if (source.coinbase?.apiKey && !target.propr.apiKey) {
     target.propr.apiKey = String(source.coinbase.apiKey).trim();
   }
@@ -364,7 +309,6 @@ function parseCredentialFileContent(content) {
   const parsed = {
     nous: { apiKey: '', model: '' },
     propr: { apiKey: '', accountId: '' },
-    nvidia: { apiKey: '' },
   };
   const text = String(content || '').trim();
   if (!text) return parsed;
@@ -402,13 +346,10 @@ async function pickCredentialFile(kind) {
   let defaultPath = getNousCredentialDefaultPath();
   if (kind === 'propr') {
     defaultPath = path.join(os.homedir(), 'OneDrive', 'Documents', 'Propr API Key.txt');
-  } else if (kind === 'nvidia') {
-    defaultPath = path.join(os.homedir(), 'OneDrive', 'Documents', 'Nvidia API Key.txt');
   }
 
   const titles = {
     propr: 'Select Propr API key file',
-    nvidia: 'Select NVIDIA API key file',
     nous: 'Select Nous Portal credentials file',
   };
 
@@ -440,19 +381,6 @@ async function pickCredentialFile(kind) {
       return { ok: true, path: filePath, nous };
     }
 
-    if (kind === 'nvidia') {
-      let apiKey = parsed.nvidia.apiKey || '';
-      if (!apiKey) {
-        const raw = fs.readFileSync(filePath, 'utf8').trim();
-        if (/^nvapi-/i.test(raw)) apiKey = raw;
-      }
-      if (!apiKey) {
-        return { ok: false, error: 'NVIDIA API key (nvapi-…) not found in that file.', path: filePath };
-      }
-      appendLog(`📂 Loaded NVIDIA API key from ${filePath}`, 'success');
-      return { ok: true, path: filePath, nvidia: { apiKey } };
-    }
-
     const propr = {
       apiKey: parsed.propr.apiKey || '',
       accountId: parsed.propr.accountId || '',
@@ -467,7 +395,7 @@ async function pickCredentialFile(kind) {
   }
 }
 
-function saveCredentials({ propr, nous, nvidia }) {
+function saveCredentials({ propr, nous }) {
   if (propr) {
     storeData.propr = {
       apiKey: String(propr.apiKey || storeData.propr.apiKey || '').trim(),
@@ -480,11 +408,7 @@ function saveCredentials({ propr, nous, nvidia }) {
       model: normalizeNousModel(nous.model || storeData.nous.model || DEFAULT_NOUS_MODEL),
     };
   }
-  if (nvidia) {
-    storeData.nvidia = {
-      apiKey: String(nvidia.apiKey || storeData.nvidia?.apiKey || '').trim(),
-    };
-  }
+  delete storeData.nvidia;
   saveStore(storeData);
   return storeData;
 }
@@ -844,17 +768,12 @@ async function testProprCredentials(credentials) {
   return result;
 }
 
-async function testNousCredentials(apiKey, model, nvidiaApiKey = '') {
+async function testNousCredentials(apiKey, model) {
   const mdl = normalizeNousModel(model);
   if (!mdl) return { ok: false, error: 'Select a model first.' };
-  const resolved = resolveApiKeyForModel(mdl, apiKey, nvidiaApiKey);
+  const resolved = resolveApiKeyForModel(mdl, apiKey);
   if (!resolved.apiKey) {
-    return {
-      ok: false,
-      error: resolved.provider === 'nvidia'
-        ? 'NVIDIA API key is required for this model.'
-        : 'Portal API key is required.',
-    };
+    return { ok: false, error: 'Portal API key is required.' };
   }
 
   appendLog(`🧪 Testing ${resolved.provider} model (${mdl})…`, 'info');
@@ -881,18 +800,12 @@ function preferDefaultFreeModels(free) {
   return [{ id: DEFAULT_NOUS_MODEL, label: `${DEFAULT_NOUS_MODEL} (free)`, free: true }, ...rest];
 }
 
-function sortedNvidiaBenchmarkModels() {
-  return [...NVIDIA_BENCHMARK_MODELS].sort((a, b) => b.benchmark - a.benchmark);
-}
-
 function isRateLimitHttpError(status, raw) {
   if (status === 429 || status === 503 || status === 502) return true;
   return /rate.?limit|too many requests|quota|capacity|overloaded|throttl/i.test(String(raw || ''));
 }
 
 async function fetchNousModelCatalog() {
-  const nvidia = sortedNvidiaBenchmarkModels();
-  const hasNvidiaKey = !!String(storeData.nvidia?.apiKey || '').trim();
   try {
     const res = await httpsRequest(NOUS_RECOMMENDED_MODELS_URL, { timeout: 15000 });
     const parsed = JSON.parse(res.raw);
@@ -908,8 +821,7 @@ async function fetchNousModelCatalog() {
     if (free.length) {
       return {
         ok: true,
-        defaultModel: hasNvidiaKey ? nvidia[0]?.id : DEFAULT_NOUS_MODEL,
-        nvidia,
+        defaultModel: DEFAULT_NOUS_MODEL,
         free,
         paid: paid.length ? paid : FALLBACK_PAID_NOUS_MODELS,
         source: 'live',
@@ -920,8 +832,7 @@ async function fetchNousModelCatalog() {
   }
   return {
     ok: true,
-    defaultModel: hasNvidiaKey ? nvidia[0]?.id : DEFAULT_NOUS_MODEL,
-    nvidia,
+    defaultModel: DEFAULT_NOUS_MODEL,
     free: FALLBACK_FREE_NOUS_MODELS,
     paid: FALLBACK_PAID_NOUS_MODELS,
     source: 'fallback',
@@ -993,40 +904,19 @@ function pingNousModel(apiKey, model, timeoutMs = 25000) {
 }
 
 async function buildModelPingCandidates() {
-  bootstrapNvidiaKeyFromDocuments();
-  const nvidiaKey = String(storeData.nvidia?.apiKey || '').trim();
   const nousKey = String(storeData.nous?.apiKey || '').trim();
-  const candidates = [];
+  if (!nousKey) return [];
 
-  if (nvidiaKey) {
-    for (const m of sortedNvidiaBenchmarkModels()) {
-      candidates.push({
-        id: m.id,
-        label: m.label,
-        benchmark: m.benchmark,
-        provider: 'nvidia',
-        apiKey: nvidiaKey,
-      });
-    }
-  }
-
-  if (nousKey) {
-    const catalog = await fetchNousModelCatalog();
-    const free = Array.isArray(catalog?.free) && catalog.free.length
-      ? catalog.free
-      : FALLBACK_FREE_NOUS_MODELS;
-    for (const m of free) {
-      candidates.push({
-        id: m.id,
-        label: m.label,
-        benchmark: 0,
-        provider: 'nous',
-        apiKey: nousKey,
-      });
-    }
-  }
-
-  return candidates;
+  const catalog = await fetchNousModelCatalog();
+  const free = Array.isArray(catalog?.free) && catalog.free.length
+    ? catalog.free
+    : FALLBACK_FREE_NOUS_MODELS;
+  return free.map((m) => ({
+    id: m.id,
+    label: m.label,
+    provider: 'nous',
+    apiKey: nousKey,
+  }));
 }
 
 function sendToRenderer(channel, payload) {
@@ -1083,30 +973,6 @@ async function updateCronModelOnly(model) {
 let freeModelSelectPromise = null;
 let lastModelPingAt = 0;
 
-function modelCandidateIndex(candidates, modelId) {
-  const mdl = normalizeNousModel(modelId);
-  const idx = candidates.findIndex((c) => normalizeNousModel(c.id) === mdl);
-  return idx >= 0 ? idx : candidates.length;
-}
-
-async function pingModelCandidate(candidate, { quiet = false } = {}) {
-  const mdl = normalizeNousModel(candidate.id);
-  const inf = resolveInferenceForModel(mdl);
-  const pingTimeout = inf.pingTimeoutMs || (inf.provider === 'nvidia' ? 90000 : 25000);
-  if (!quiet) {
-    appendLog(
-      `  → ping ${mdl} (${inf.provider}${candidate.benchmark ? ` · bench ${candidate.benchmark}` : ''})…`,
-      'info',
-    );
-  }
-  const res = await pingInferenceModel(candidate.apiKey, mdl, pingTimeout);
-  if (!res.ok && !quiet) {
-    const errLabel = res.rateLimited ? `${res.error} (rate limit)` : (res.error || 'no pong');
-    appendLog(`  ✗ ${mdl}: ${errLabel}`, 'warn');
-  }
-  return { ...res, model: mdl, candidate };
-}
-
 async function applyModelSwitch(mdl, { reply, reason } = {}) {
   const previous = normalizeNousModel(storeData.nous?.model || DEFAULT_NOUS_MODEL);
   const changed = mdl !== previous;
@@ -1138,64 +1004,29 @@ async function applyModelSwitch(mdl, { reply, reason } = {}) {
 async function autoSelectWorkingFreeModelOnce({ quiet = false } = {}) {
   const candidates = await buildModelPingCandidates();
   if (!candidates.length) {
-    if (!quiet) appendLog('ℹ Skipping model auto-ping: no NVIDIA or Nous API key saved.', 'info');
+    if (!quiet) appendLog('ℹ Skipping model auto-ping: no Nous API key saved.', 'info');
     return { ok: false, reason: 'no-api-key' };
   }
 
   const current = normalizeNousModel(storeData.nous?.model || DEFAULT_NOUS_MODEL);
-  const currentIdx = modelCandidateIndex(candidates, current);
-  const bestModel = normalizeNousModel(candidates[0].id);
-  const onFallback = currentIdx > 0;
-
   if (!quiet) {
-    appendLog(
-      onFallback
-        ? `🔎 Auto-ping: retrying ${bestModel} first (fallback active on ${current})…`
-        : `🔎 Auto-ping ${candidates.length} models (NVIDIA benchmark order, then Nous free)…`,
-      'info',
-    );
-  } else if (onFallback) {
-    appendLog(`🔎 Minute ping: retrying ${bestModel} (current fallback: ${current})`, 'info');
+    appendLog(`🔎 Auto-ping ${candidates.length} Nous free models…`, 'info');
   }
 
-  // 1) Always probe higher-ranked models first so we upgrade as soon as rate limits clear.
-  for (let i = 0; i < currentIdx; i += 1) {
-    const res = await pingModelCandidate(candidates[i], { quiet });
+  for (const candidate of candidates) {
+    const mdl = normalizeNousModel(candidate.id);
+    const inf = resolveInferenceForModel(mdl);
+    if (!quiet) appendLog(`  → ping ${mdl} (${inf.provider})…`, 'info');
+    const res = await pingInferenceModel(candidate.apiKey, mdl, inf.pingTimeoutMs);
     if (res.ok) {
-      if (!quiet || onFallback) {
-        appendLog(`✅ Best model back: ${res.model} — "${String(res.reply).slice(0, 40)}"`, 'success');
+      if (!quiet) {
+        appendLog(`✅ Model pong: ${mdl} — "${String(res.reply).slice(0, 40)}"`, 'success');
       }
       lastModelPingAt = Date.now();
-      return applyModelSwitch(res.model, { reply: res.reply, reason: 'upgrade-after-fallback' });
+      return applyModelSwitch(mdl, { reply: res.reply, reason: 'ping-ok' });
     }
-  }
-
-  // 2) Keep the current model if it still responds — avoid downgrading on a transient top-model rate limit.
-  if (currentIdx < candidates.length) {
-    const res = await pingModelCandidate(candidates[currentIdx], { quiet });
-    if (res.ok) {
-      if (onFallback) {
-        appendLog(
-          `ℹ Keeping ${current} — ${bestModel} still unavailable; will retry next minute`,
-          'info',
-        );
-      } else if (!quiet) {
-        appendLog(`✅ Current model OK: ${current}`, 'success');
-      }
-      lastModelPingAt = Date.now();
-      sendToRenderer('kt-free-model-selected', { model: current, reply: res.reply, changed: false, held: true });
-      return { ok: true, model: current, reply: res.reply, changed: false, held: true };
-    }
-  }
-
-  // 3) Current model failed — fail over to the next working lower-ranked model.
-  for (let i = currentIdx + 1; i < candidates.length; i += 1) {
-    const res = await pingModelCandidate(candidates[i], { quiet });
-    if (res.ok) {
-      appendLog(`✅ Failover model: ${res.model} — "${String(res.reply).slice(0, 40)}"`, 'success');
-      lastModelPingAt = Date.now();
-      return applyModelSwitch(res.model, { reply: res.reply, reason: 'failover' });
-    }
+    const errLabel = res.rateLimited ? `${res.error} (rate limit)` : (res.error || 'no pong');
+    if (!quiet) appendLog(`  ✗ ${mdl}: ${errLabel}`, 'warn');
   }
 
   if (!quiet) {
@@ -1229,9 +1060,7 @@ function hermesChildEnv() {
     env.PATH = [...extraBins, env.PATH || ''].filter(Boolean).join(sep);
   }
   applyNousKeyToEnv(env);
-  const nvidiaKey = String(storeData.nvidia?.apiKey || '').trim();
-  if (nvidiaKey) env.NVIDIA_API_KEY = nvidiaKey;
-  else delete env.NVIDIA_API_KEY;
+  delete env.NVIDIA_API_KEY;
   const propr = storeData.propr || {};
   const proprKey = String(propr.apiKey || '').trim();
   if (proprKey) env.PROPR_API_KEY = proprKey;
@@ -1423,24 +1252,15 @@ function syncHermesConfig() {
 }
 
 async function syncHermesCredentials(token, { restartGateway = false, requirePropr = false } = {}) {
-  bootstrapNvidiaKeyFromDocuments();
   const model = normalizeNousModel(storeData.nous?.model || DEFAULT_NOUS_MODEL);
-  const inf = resolveInferenceForModel(model);
   const nousKey = resolveNousApiKey();
-  const nvidiaKey = String(storeData.nvidia?.apiKey || '').trim();
   const propr = storeData.propr || {};
   const proprKey = String(propr.apiKey || '').trim();
 
   if (requirePropr && !proprKey) {
     return { ok: false, msg: 'Propr API key not set — open Setup, enter your pk_live_ key, and Save.' };
   }
-  if (inf.provider === 'nvidia' && !nvidiaKey) {
-    return {
-      ok: false,
-      msg: 'NVIDIA API key not set — save in Setup or place Nvidia API Key.txt in Documents.',
-    };
-  }
-  if (inf.provider === 'nous' && !nousKey) {
+  if (!nousKey) {
     return { ok: false, msg: 'Nous Portal API key not set — open Setup tab, enter your key, and Save.' };
   }
   if (!String(storeData.nous?.apiKey || '').trim() && nousKey) {
@@ -1455,7 +1275,6 @@ async function syncHermesCredentials(token, { restartGateway = false, requirePro
     after = upsertEnvVar(after, 'NOUS_API_KEY', nousKey);
     after = upsertEnvVar(after, 'NOUSRESEARCH_API_KEY', nousKey);
   }
-  if (nvidiaKey) after = upsertEnvVar(after, 'NVIDIA_API_KEY', nvidiaKey);
   if (proprKey) after = upsertEnvVar(after, 'PROPR_API_KEY', proprKey);
   if (propr.accountId) after = upsertEnvVar(after, 'PROPR_ACCOUNT_ID', propr.accountId);
 
@@ -1469,7 +1288,6 @@ async function syncHermesCredentials(token, { restartGateway = false, requirePro
   if (token) {
     const envVars = {
       ...(nousKey ? { NOUS_API_KEY: nousKey, NOUSRESEARCH_API_KEY: nousKey } : {}),
-      ...(nvidiaKey ? { NVIDIA_API_KEY: nvidiaKey } : {}),
       ...(proprKey ? { PROPR_API_KEY: proprKey } : {}),
       ...(propr.accountId ? { PROPR_ACCOUNT_ID: propr.accountId } : {}),
     };
@@ -2535,12 +2353,7 @@ ipcMain.handle('announce-voice', (_e, text) => {
   appendLog(`🔊 Voice: ${msg}`, 'info');
 });
 ipcMain.handle('pick-nous-credential-file', async () => pickCredentialFile('nous'));
-ipcMain.handle('pick-nvidia-credential-file', async () => pickCredentialFile('nvidia'));
-
-ipcMain.handle('get-credentials', () => {
-  bootstrapNvidiaKeyFromDocuments();
-  return storeData;
-});
+ipcMain.handle('get-credentials', () => storeData);
 ipcMain.handle('save-credentials', async (_e, data) => {
   try { storeData = migrateStoreData({ ...storeData, ...data }); saveStore(storeData); } catch {}
   try {
@@ -2569,7 +2382,7 @@ ipcMain.handle('write-compendium', async () => {
 });
 ipcMain.handle('get-app-version', () => app.getVersion());
 ipcMain.handle('get-nous-models', () => fetchNousModelCatalog());
-ipcMain.handle('test-nous-credentials', (_e, { apiKey, model, nvidiaApiKey }) => testNousCredentials(apiKey, model, nvidiaApiKey));
+ipcMain.handle('test-nous-credentials', (_e, { apiKey, model }) => testNousCredentials(apiKey, model));
 ipcMain.handle('auto-select-free-model', async () => autoSelectWorkingFreeModel());
 ipcMain.handle('check-hermes', async () => checkHermesInstalled());
 ipcMain.handle('install-hermes', async () => installHermes());
@@ -2932,7 +2745,6 @@ app.whenReady().then(async () => {
   else appendLog('⚠ BloHunter Connect not found — Trading tab needs Downloads\\blohunter-connect', 'warn');
   getBlohunterBridge().setLiveAccountProvider(() => fetchLiveProprAccount({ quiet: true }));
 
-  bootstrapNvidiaKeyFromDocuments();
   autoconnectHermes();
   setTimeout(() => {
     autoSelectWorkingFreeModel().catch((e) => {

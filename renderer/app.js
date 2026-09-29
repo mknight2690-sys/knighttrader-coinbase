@@ -94,9 +94,8 @@ const el = {
 
   // Setup
   formSetup: $('form-setup'),
-  nousApiKey: $('nous-api-key'), nvidiaApiKey: $('nvidia-api-key'), nousModel: $('nous-model'),
+  nousApiKey: $('nous-api-key'), nousModel: $('nous-model'),
   btnLoadNousFile: $('btn-load-nous-file'), nousFilePath: $('nous-file-path'),
-  btnLoadNvidiaFile: $('btn-load-nvidia-file'), nvidiaFilePath: $('nvidia-file-path'),
   btnTestNous: $('btn-test-nous'), nousTestStatus: $('nous-test-status'),
   proprApiKey: $('propr-api-key'),
   btnLoadProprFile: $('btn-load-propr-file'), proprFilePath: $('propr-file-path'),
@@ -141,19 +140,8 @@ async function populateNousModels() {
   const previous = el.nousModel.value;
   try {
     const catalog = await window.kt.getNousModels();
-    if (!catalog?.nvidia?.length && !catalog?.free?.length) return;
+    if (!catalog?.free?.length) return;
     el.nousModel.innerHTML = '';
-    if (catalog.nvidia?.length) {
-      const nvidiaGroup = document.createElement('optgroup');
-      nvidiaGroup.label = 'NVIDIA NIM (free · benchmark order)';
-      for (const model of catalog.nvidia) {
-        const opt = document.createElement('option');
-        opt.value = model.id;
-        opt.textContent = model.label || model.id;
-        nvidiaGroup.appendChild(opt);
-      }
-      el.nousModel.appendChild(nvidiaGroup);
-    }
     const freeGroup = document.createElement('optgroup');
     freeGroup.label = 'Nous free tier';
     for (const model of (catalog.free || [])) {
@@ -174,7 +162,7 @@ async function populateNousModels() {
       }
       el.nousModel.appendChild(paidGroup);
     }
-    setNousModelValue(previous || catalog.defaultModel || catalog.nvidia?.[0]?.id || 'tencent/hy3:free');
+    setNousModelValue(previous || catalog.defaultModel || 'tencent/hy3:free');
   } catch (_) {}
 }
 
@@ -201,9 +189,6 @@ async function init() {
     }
     if (creds.propr) {
       el.proprApiKey.value = creds.propr.apiKey || '';
-    }
-    if (creds.nvidia) {
-      el.nvidiaApiKey.value = creds.nvidia.apiKey || '';
     }
   } catch (e) {}
 
@@ -383,9 +368,6 @@ async function saveAndWriteCompendium() {
       apiKey: el.nousApiKey.value.trim(),
       model: el.nousModel.value
     },
-    nvidia: {
-      apiKey: el.nvidiaApiKey.value.trim(),
-    },
     propr: {
       apiKey: el.proprApiKey.value.trim(),
     }
@@ -414,23 +396,13 @@ function showSaveStatus(msg, err) {
   setTimeout(() => el.saveStatus.classList.remove('show'), 3000);
 }
 
-function selectedModelProvider() {
-  const opt = el.nousModel?.selectedOptions?.[0];
-  const groupLabel = opt?.parentElement?.label || '';
-  if (/nvidia/i.test(groupLabel)) return 'nvidia';
-  return 'nous';
-}
-
 function updateNousTestButton() {
   const model = el.nousModel?.value?.trim() || '';
   if (!model) {
     el.btnTestNous.disabled = true;
     return;
   }
-  const key = selectedModelProvider() === 'nvidia'
-    ? el.nvidiaApiKey.value.trim()
-    : el.nousApiKey.value.trim();
-  el.btnTestNous.disabled = !key;
+  el.btnTestNous.disabled = !el.nousApiKey.value.trim();
 }
 
 function setNousTestStatus(msg, state) {
@@ -719,10 +691,6 @@ el.nousApiKey.addEventListener('input', () => {
   updateNousTestButton();
   setNousTestStatus('', '');
 });
-el.nvidiaApiKey.addEventListener('input', () => {
-  updateNousTestButton();
-  setNousTestStatus('', '');
-});
 el.nousModel.addEventListener('change', () => {
   updateNousTestButton();
   setNousTestStatus('', '');
@@ -749,29 +717,6 @@ el.btnLoadNousFile.addEventListener('click', async () => {
   }
 });
 
-el.btnLoadNvidiaFile.addEventListener('click', async () => {
-  el.btnLoadNvidiaFile.disabled = true;
-  try {
-    const result = await window.kt.pickNvidiaCredentialFile();
-    if (result.cancelled) return;
-    if (!result.ok) {
-      setNousTestStatus(`✗ ${result.error || 'Could not load file'}`, 'error');
-      return;
-    }
-    if (result.nvidia?.apiKey) el.nvidiaApiKey.value = result.nvidia.apiKey;
-    setCredFilePath(el.nvidiaFilePath, result.path);
-    updateNousTestButton();
-    setNousTestStatus('', '');
-    try {
-      await window.kt.saveCredentials({ nvidia: result.nvidia || {} });
-    } catch {}
-  } catch (e) {
-    setNousTestStatus(`✗ ${e.message}`, 'error');
-  } finally {
-    el.btnLoadNvidiaFile.disabled = false;
-  }
-});
-
 el.btnLoadProprFile.addEventListener('click', async () => {
   el.btnLoadProprFile.disabled = true;
   try {
@@ -795,18 +740,14 @@ el.btnLoadProprFile.addEventListener('click', async () => {
 
 el.btnTestNous.addEventListener('click', async () => {
   const model = el.nousModel.value;
-  const provider = selectedModelProvider();
-  const apiKey = provider === 'nvidia'
-    ? el.nvidiaApiKey.value.trim()
-    : el.nousApiKey.value.trim();
+  const apiKey = el.nousApiKey.value.trim();
   if (!apiKey || !model) return;
 
   el.btnTestNous.disabled = true;
   setNousTestStatus('Testing…', 'pending');
   try {
     const result = await window.kt.testNousCredentials({
-      apiKey: el.nousApiKey.value.trim(),
-      nvidiaApiKey: el.nvidiaApiKey.value.trim(),
+      apiKey,
       model,
     });
     if (result.ok) {
@@ -1006,7 +947,6 @@ el.logContainer.addEventListener('scroll', () => {
 
 // Quick links
 const NOUS_PORTAL_URL = 'https://portal.nousresearch.com/manage-subscription';
-const NVIDIA_BUILD_URL = 'https://build.nvidia.com/';
 
 const LINKS = {
   'link-propr-dashboard': 'https://app.propr.xyz',
@@ -1015,7 +955,6 @@ const LINKS = {
   'link-hermes-dashboard': 'http://127.0.0.1:9130',
   'link-hermes-docs': 'https://hermes-agent.nousresearch.com/docs/integrations/nous-portal',
   'link-nous-portal': NOUS_PORTAL_URL,
-  'link-nvidia-build': NVIDIA_BUILD_URL,
   'link-propr-api': 'https://app.propr.xyz/settings',
   'btn-open-propr': 'https://app.propr.xyz'
 };

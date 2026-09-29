@@ -24,8 +24,6 @@ contextBridge.exposeInMainWorld('kt', {
 
   pickNousCredentialFile: () => ipcRenderer.invoke('pick-nous-credential-file'),
 
-  pickNvidiaCredentialFile: () => ipcRenderer.invoke('pick-nvidia-credential-file'),
-
   pickProprCredentialFile: () => ipcRenderer.invoke('pick-propr-credential-file'),
 
   announceVoice: (text) => ipcRenderer.invoke('announce-voice', text),
