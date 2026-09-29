@@ -1221,6 +1221,26 @@ function autoSelectWorkingFreeModel(options = {}) {
 }
 
 // ── Hermes helpers ─────────────────────────────────────────────────────────
+function hermesChildEnv() {
+  const env = { ...process.env, HERMES_HOME };
+  const extraBins = nodeJsBinDirs();
+  if (extraBins.length) {
+    const sep = process.platform === 'win32' ? ';' : ':';
+    env.PATH = [...extraBins, env.PATH || ''].filter(Boolean).join(sep);
+  }
+  applyNousKeyToEnv(env);
+  const nvidiaKey = String(storeData.nvidia?.apiKey || '').trim();
+  if (nvidiaKey) env.NVIDIA_API_KEY = nvidiaKey;
+  else delete env.NVIDIA_API_KEY;
+  const propr = storeData.propr || {};
+  const proprKey = String(propr.apiKey || '').trim();
+  if (proprKey) env.PROPR_API_KEY = proprKey;
+  else delete env.PROPR_API_KEY;
+  if (propr.accountId) env.PROPR_ACCOUNT_ID = propr.accountId;
+  else delete env.PROPR_ACCOUNT_ID;
+  return env;
+}
+
 function hermesCliEnv() {
   return hermesChildEnv();
 }
