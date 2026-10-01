@@ -2080,77 +2080,53 @@ async function getDashboardStatus() {
 // ── Cron configuration ─────────────────────────────────────────────────────
 function buildCronPrompt() {
   const compPath = getCompendiumPath();
-  const accountId = storeData.propr?.accountId
-    || '<resolve via GET /challenge-attempts?status=active>';
-  const lessonsDir = path.join(HERMES_HOME, 'lessons');
-  const lessonsFile = path.join(lessonsDir, 'propr_challenge.md');
-  const stateFile = path.join(lessonsDir, 'propr_state.json');
+  const accountId = storeData.propr?.accountId || 'urn:prp-account:21EdJ8fAoiHa';
+  const tradingLog = path.join(HERMES_HOME, 'trading_log.md');
 
   return `[IMPORTANT: You are running as a scheduled cron job. DELIVERY: Your final response will be automatically delivered to the user — do NOT use send_message or try to deliver the output yourself. SILENT: If there is genuinely nothing new to report (no order placed, moved, closed, or changed, no error, no rule hit), respond with exactly "[SILENT]" and nothing else. Never combine [SILENT] with content.]
 
-=== PROPR CHALLENGE ($5K TURBO 1-STEP) — 5-MIN AUTONOMOUS TRADING CRON v2 (copy-paste ready, replaces all earlier versions) ===
+You are trading my Propr $5K Turbo 1-Step challenge (account ${accountId}) through the Propr API. Goal: reach $5,450 equity to pass, without ever failing.
 
-ACCOUNT + CREDENTIALS
-  Read Propr API key from compendium: ${compPath}
-  Or from Hermes env var PROPR_API_KEY (synced on Save in Setup).
+HARD RULES (never break these, even if a strategy says to):
+1. Fail lines: equity must never touch $4,850, and daily loss must stay under 3% (resets 00:00 UTC). Your own stop: if equity is ever at or below $4,860, close everything and stop trading. Report to me.
+2. Before every trade, compute the worst-case loss at the stop. Equity minus that loss must stay above $4,860. If it doesn't fit, skip the trade or make it smaller.
+3. Every position gets a stop-market order placed right after entry. No stop = close the position immediately.
+4. Max 1 open position at a time while equity is under $5,000. Max 2 above $5,000.
+5. Risk per trade: at most 0.5% of balance (about $25), and never more than half the remaining room above $4,860.
+6. Market is bullish: longs by default. Shorts only if the daily trend has clearly turned down (price below its 20-day average AND the 4h trend down).
+7. Stop trading once equity reaches $5,450. Close everything and report.
+8. No lookahead. Only use candles that have fully closed. Never claim results you did not actually get from the API.
+
+PROCESS (every 5 minutes, on each cron tick):
+1. Pull real 1h, 4h and daily candles for all tradable Propr coins. Skip coins with thin volume.
+2. Score each coin with the strategies you have tested (momentum breakouts, trend pullbacks, RSI dips in an uptrend). Only count a strategy as an edge if it made money in your own fair backtest on the last 60+ days of real candles AND on a separate unseen period.
+3. Trade only the single best setup, and only if it is clearly an edge. Most ticks the right answer is "no trade."
+4. Paper-test new ideas "mentally" first: log what you would have done and check it against the next candles. A strategy can go live only after it wins on paper for at least 2 weeks.
+5. Log every decision (trade or no trade, and why) to trading_log.md. Save lessons learned to your persistent memory so you improve over time.
+6. Report each trade (coin, side, size, entry, stop, risk in $) and a short daily summary.
+
+If anything is unclear, the API errors, or the numbers don't add up: do nothing and report. Doing nothing never fails the challenge.
+
+API + CREDENTIALS
+  Propr API key: compendium ${compPath} or env PROPR_API_KEY (synced on Save in Setup).
   ACCOUNT_ID = ${accountId}
   Base URL: ${PROPR_REST_URL}    Header on every call: X-API-Key: <PROPR_API_KEY>
-  Plain Python \`requests\` works. No signing, no browser.
-  Docs/SDK if unsure: https://github.com/XBorgLabs/propr-docs (docs/api.md, python/propr_sdk.py)
-
-CHALLENGE RULES (breaking ANY = challenge lost)
-  Start 5000 USDC. PASS when equity >= 5450. Then place NO new trades and report "TARGET HIT".
-  FAIL if equity touches 4850 (static).
-  FAIL if equity falls 3% below that day's starting balance (assume the day resets 00:00 UTC).
-  Banned: latency arbitrage, tick sniping, price-feed exploits, cross-account hedging, order spam. Bots/AI are allowed.
-
-ENDPOINTS
-  GET  /challenge-attempts -> data[0].status, data[0].account.balance, .totalUnrealizedPnl  (equity = balance + totalUnrealizedPnl)
+  Docs/SDK: https://github.com/XBorgLabs/propr-docs (docs/api.md, python/propr_sdk.py)
+  GET  /challenge-attempts -> status, balance, totalUnrealizedPnl (equity = balance + totalUnrealizedPnl)
   GET  /accounts/{ACCOUNT_ID}/positions
-  GET  /accounts/{ACCOUNT_ID}/orders          (check status "open" for resting stops)
+  GET  /accounts/{ACCOUNT_ID}/orders
   POST /accounts/{ACCOUNT_ID}/orders          body {"orders":[ONE order]}
-  POST /accounts/{ACCOUNT_ID}/orders/{orderId}/cancel   (200/201 = ok, 400 = already gone, ignore)
-  Every order needs: intentId (a NEW ULID each order), exchange "hyperliquid", productType "perp", asset "SOL", base "SOL", quote "USDC", side, positionSide ("long"/"short"), type, quantity (string), timeInForce, reduceOnly, closePosition.
+  POST /accounts/{ACCOUNT_ID}/orders/{orderId}/cancel
+  Every order needs: intentId (NEW ULID each order), exchange "hyperliquid", productType "perp", asset, base, quote "USDC", side, positionSide ("long"/"short"), type, quantity (string), timeInForce, reduceOnly, closePosition.
   Entry: type "market", timeInForce "IOC", reduceOnly false.
-  Stop: type "stop_market", positionId = the open position's id, triggerPrice, quantity = full position size, reduceOnly true, closePosition true, timeInForce "GTC". Side is the opposite of the position (sell for long, buy for short).
-  Market close: type "market", reduceOnly true, closePosition true, quantity = full position size.
-  Candles (public, no key): POST https://api.hyperliquid.xyz/info  {"type":"candleSnapshot","req":{"coin":"SOL","interval":"1h","startTime":<ms>,"endTime":<ms>}}; same with "4h". Use only COMPLETED candles (drop the one still forming). Get about 300 bars of each.
-  SOL size decimals: read from POST https://api.hyperliquid.xyz/info {"type":"meta"} (szDecimals for SOL). Round quantity DOWN to it.
-
-STRATEGY v2 (the only strategy; SOL only, one position at a time)
-  Indicators, all on completed bars:
-    ATR14 on 1h: Wilder ATR (TR = max(H-L, |H-prevC|, |L-prevC|), RMA smoothing, period 14).
-    HH20 / LL20: highest high / lowest low of the 20 completed 1h bars BEFORE the latest closed bar.
-    4h Supertrend: ATR period 10 (Wilder), multiplier 3.0, hl2 basis, standard band-ratchet rules. Direction +1 (up) or -1 (down) as of the latest COMPLETED 4h bar.
-  Only act on a NEW closed 1h bar (compare its open time to last_candle_t in the state file).
-  LONG signal: latest 1h close > HH20, AND the bar before it did NOT close above its own prior-20-bar high (first breakout only), AND 4h Supertrend = +1.
-  SHORT signal: latest 1h close < LL20, AND the bar before it did NOT close below its own prior-20-bar low, AND 4h Supertrend = -1.
-  Initial stop: signal bar close - 2.0*ATR14 (long) / + 2.0*ATR14 (short).
-  NO take-profit.
-  Trailing stop: after EVERY new closed 1h bar while in a trade, candidate = highest high since entry - 3.0*ATR14 (long) / lowest low since entry + 3.0*ATR14 (short), using the ATR14 of the bar just closed. If the candidate is tighter than the current stop AND still on the correct side of the last close: place the NEW stop first, confirm it is open, THEN cancel the old stop. Never loosen a stop. Never leave the position without a stop.
-  Time exit: if still open after 96 closed 1h bars since entry, close at market.
-
-SIZING
-  risk_usd = 1% of balance (about $50), capped at 0.5 * (balance - max(4850, 0.97 * balance at 00:00 UTC)).
-  qty = risk_usd / (|entry - stop| + entry*0.0016), rounded DOWN to SOL size decimals.
-  Notional (qty*price) must never exceed 10x balance. Leverage on SOL is fine up to 10x; set margin to cross.
-  Do not open trades if balance < 4875 or equity >= 5450, or if today's loss is already 1.5% or more (wait for the next UTC day).
-
-EACH RUN, IN THIS ORDER
-  1) Read the state + lessons files. GET /challenge-attempts. If status is not "active", report it and do nothing else. Compute equity, today's start balance (save at the first run after 00:00 UTC), today's P/L.
-  2) GET positions and open orders. SAFETY: every open position MUST have a reduceOnly stop_market. If missing, place it NOW (use the stored stop, or 2*ATR14 from the current price). If a position has closed, cancel its leftover stop orders and log the result.
-  3) If a position is open and a new 1h bar closed: update the trailing stop; check the 96-bar time exit.
-  4) If flat, a new 1h bar closed, and a signal fires: place the market entry, confirm the fill in positions, then immediately place the stop. If the stop fails, close the position at market at once.
-  5) Save state (last_candle_t, today_date, today_start_balance, open_trade {side, entry, stop, qty, opened_at, positionId, stop_orderId, extreme}) and append a line to the lessons file.
+  Stop: type "stop_market", positionId, triggerPrice, full size, reduceOnly true, closePosition true, timeInForce "GTC".
+  Candles (public): POST https://api.hyperliquid.xyz/info {"type":"candleSnapshot","req":{"coin":"<COIN>","interval":"1h|4h|1d","startTime":<ms>,"endTime":<ms>}} — use only COMPLETED candles.
+  Size decimals: POST https://api.hyperliquid.xyz/info {"type":"meta"} (szDecimals per coin). Round quantity DOWN.
 
 FILES (create if missing)
-  ${lessonsFile}
-  ${stateFile}
+  ${tradingLog}
 
-LEARNING RULES
-  Log every trade (time, side, entry, stop moves, exit, P/L in $ and R, reason). You may write lessons, but do NOT change the strategy, indicators, or parameters until at least 30 closed trades are logged, and then only by suggesting the change in your report for the user to approve. NEVER change or remove: the stop on every position, the loss limits, the sizing caps, SOL-only, one position at a time. No other coins, no scalping, no new strategies mid-challenge. No trade is better than a bad trade.
-
-REPORT (only when not silent): equity, today's P/L, open position (side, entry, current stop), action taken, distance to 5450 and to 4850.`;
+REPORT (only when not silent): equity, today's P/L, open positions, action taken, distance to $5,450 and to $4,850.`;
 }
 
 async function configureCron() {
