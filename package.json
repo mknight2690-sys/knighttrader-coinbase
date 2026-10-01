@@ -1,6 +1,6 @@
 {
   "name": "knight-trader-propr",
-  "version": "2.0.13",
+  "version": "2.0.14",
   "description": "KnightTrader Propr — Hermes credential manager & launcher",
   "main": "main.js",
   "scripts": {
@@ -29,14 +29,22 @@
     },
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage",
+        "tar.gz"
       ],
+      "executableName": "knighttrader-propr",
       "icon": "assets/icon.png",
       "category": "Finance",
       "maintainer": "KnightTrader <support@knighttrader.local>",
       "synopsis": "Hermes + Propr challenge auto-trading launcher",
       "description": "KnightTrader Propr desktop app — Hermes credentials, dashboard, gateway, and Propr cron."
     },
+    "extraFiles": [
+      {
+        "from": "scripts/run-linux.sh",
+        "to": "run-knighttrader-propr.sh"
+      }
+    ],
     "publish": {
       "provider": "github",
       "owner": "mknight2690-sys",

@@ -50,4 +50,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run build:linux
+        run: |
+          npm run build:linux
+          chmod +x scripts/run-linux.sh
+          gh release upload "${GITHUB_REF_NAME}" scripts/run-linux.sh#run-knighttrader-propr.sh --clobber

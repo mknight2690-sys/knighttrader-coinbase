@@ -14,6 +14,19 @@ const crypto = require('crypto');
 const http = require('http');
 const https = require('https');
 const os = require('os');
+const {
+  isWindows,
+  isUnixLike,
+  spawnOptions,
+  findHermesExecutable: findHermesExecutableOnPlatform,
+  findVenvPython,
+  findUv,
+  legacyHermesAgentDirs,
+} = require('./lib/platform');
+const { parseCliArgs, printHeadlessHelp } = require('./lib/cli');
+const { runHeadlessMode } = require('./lib/headless');
+const { bootstrapCredentialsFromEnvironment } = require('./lib/env-bootstrap');
+const { setPaperOnly, isPaperOnly } = require('./lib/paper-mode');
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -30,7 +43,19 @@ const DASHBOARD_URL = `http://127.0.0.1:${DASHBOARD_PORT}`;
 
 const HERMES_HOME    = path.join(app.getPath('userData'), 'hermes-propr');
 const HERMES_INSTALL = path.join(HERMES_HOME, 'hermes-agent');
-const HERMES_EXE     = path.join(HERMES_INSTALL, 'venv', 'Scripts', 'hermes.exe');
+
+const CLI_ARGS = parseCliArgs(process.argv);
+const IS_HEADLESS = CLI_ARGS.headless;
+
+if (CLI_ARGS.help && IS_HEADLESS) {
+  printHeadlessHelp();
+  process.exit(0);
+}
+
+if (IS_HEADLESS) {
+  app.disableHardwareAcceleration();
+  if (CLI_ARGS.paperOnly) setPaperOnly(true);
+}
 
 const STORE_KEY  = Buffer.from('kt-aes256-key-knighttrader-2024!');
 const STORE_PATH = path.join(app.getPath('userData'), 'kt-config.enc');
@@ -1061,6 +1086,7 @@ function hermesChildEnv() {
   }
   applyNousKeyToEnv(env);
   delete env.NVIDIA_API_KEY;
+  if (isPaperOnly()) env.KT_PAPER_ONLY = '1';
   const propr = storeData.propr || {};
   const proprKey = String(propr.apiKey || '').trim();
   if (proprKey) env.PROPR_API_KEY = proprKey;
@@ -1203,16 +1229,30 @@ function readNousKeyFromEnvFile() {
 }
 
 function resolveNousApiKey() {
-  return String(storeData.nous?.apiKey || readNousKeyFromEnvFile() || '').trim();
+  return String(
+    storeData.nous?.apiKey
+    || process.env.NOUS_API_KEY
+    || process.env.NOUSRESEARCH_API_KEY
+    || readNousKeyFromEnvFile()
+    || '',
+  ).trim();
 }
 
 function nodeJsBinDirs() {
-  return [
-    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs'),
-    path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'nodejs'),
+  const dirs = [
     path.join(HERMES_INSTALL, 'venv', 'Scripts'),
     path.join(HERMES_INSTALL, 'venv', 'bin'),
-  ].filter((dir) => fs.existsSync(dir));
+    path.join(HERMES_INSTALL, '.venv', 'Scripts'),
+    path.join(HERMES_INSTALL, '.venv', 'bin'),
+    path.join(HERMES_INSTALL, 'bin'),
+  ];
+  if (isWindows()) {
+    dirs.unshift(
+      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs'),
+      path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'nodejs'),
+    );
+  }
+  return dirs.filter((dir) => fs.existsSync(dir));
 }
 
 function applyNousKeyToEnv(env) {
@@ -1240,7 +1280,7 @@ function syncHermesConfig() {
         cwd: HERMES_INSTALL,
         env: hermesChildEnv(),
         timeout: 20000,
-        windowsHide: true,
+        ...spawnOptions(),
       });
     }
     appendLog(`✅ Hermes config synced (${inf.provider} · ${model})`, 'success');
@@ -1277,6 +1317,8 @@ async function syncHermesCredentials(token, { restartGateway = false, requirePro
   }
   if (proprKey) after = upsertEnvVar(after, 'PROPR_API_KEY', proprKey);
   if (propr.accountId) after = upsertEnvVar(after, 'PROPR_ACCOUNT_ID', propr.accountId);
+  if (isPaperOnly()) after = upsertEnvVar(after, 'KT_PAPER_ONLY', '1');
+  else if (/^KT_PAPER_ONLY=/m.test(after)) after = upsertEnvVar(after, 'KT_PAPER_ONLY', '0');
 
   if (after !== before) {
     fs.writeFileSync(envPath, after, 'utf8');
@@ -1417,19 +1459,17 @@ function normalizeProcessExitCode(code) {
 }
 
 function findHermesExecutable() {
-  const candidates = [
-    path.join(HERMES_INSTALL, 'venv', 'Scripts', 'hermes.exe'),
-    path.join(HERMES_INSTALL, 'venv', 'Scripts', 'hermes'),
-    path.join(HERMES_INSTALL, 'bin', 'hermes.exe'),
-    path.join(HERMES_INSTALL, 'bin', 'hermes'),
-    path.join(HERMES_INSTALL, '.venv', 'Scripts', 'hermes.exe'),
-    path.join(HERMES_INSTALL, '.venv', 'Scripts', 'hermes'),
-    path.join(HERMES_INSTALL, '.venv', 'bin', 'hermes'),
-    HERMES_EXE,
-    path.join(HERMES_HOME, 'bin', 'hermes.exe'),
-    path.join(HERMES_HOME, 'bin', 'hermes'),
-  ];
-  return candidates.find((p) => fs.existsSync(p)) || null;
+  return findHermesExecutableOnPlatform(HERMES_HOME, HERMES_INSTALL);
+}
+
+function bootstrapCredentialsFromEnv() {
+  return bootstrapCredentialsFromEnvironment({
+    storeData,
+    saveStore,
+    getHermesEnvPath,
+    defaultNousModel: DEFAULT_NOUS_MODEL,
+    normalizeNousModel,
+  });
 }
 
 function writeHermesInstallLauncher() {
@@ -1516,23 +1556,34 @@ function installHermes() {
     fs.mkdirSync(HERMES_HOME, { recursive: true });
 
     let launcherPath;
+    let proc;
+    const childEnv = {
+      ...process.env,
+      HERMES_HOME,
+      INSTALL_DIR: HERMES_INSTALL,
+    };
+
     try {
-      launcherPath = writeHermesInstallLauncher();
+      if (isUnixLike()) {
+        launcherPath = path.join(__dirname, 'scripts', 'install-hermes-unix.sh');
+        proc = spawn('bash', [launcherPath], {
+          env: childEnv,
+          ...spawnOptions(),
+        });
+      } else {
+        launcherPath = writeHermesInstallLauncher();
+        proc = spawn('powershell.exe', [
+          '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', launcherPath
+        ], {
+          env: childEnv,
+          ...spawnOptions(),
+        });
+      }
     } catch (e) {
       appendLog(`❌ Failed to prepare installer: ${e.message}`, 'error');
       resolve({ ok: false, error: e.message });
       return;
     }
-
-    const proc = spawn('powershell.exe', [
-      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', launcherPath
-    ], {
-      windowsHide: true,
-      env: {
-        ...process.env,
-        HERMES_HOME: HERMES_HOME,
-      },
-    });
 
     proc.stdout.on('data', (d) => {
       d.toString().split('\n').filter(Boolean).forEach((line) => {
@@ -1546,7 +1597,9 @@ function installHermes() {
     proc.stderr.on('data', (d) => d.toString().split('\n').filter(Boolean).forEach((l) => appendLog(l, 'warn')));
 
     proc.on('close', async (code) => {
-      try { fs.unlinkSync(launcherPath); } catch {}
+      if (!isUnixLike()) {
+        try { fs.unlinkSync(launcherPath); } catch {}
+      }
 
       const status = checkHermesInstalled();
       if (status.installed) {
@@ -1576,7 +1629,9 @@ function installHermes() {
     });
 
     proc.on('error', (e) => {
-      try { fs.unlinkSync(launcherPath); } catch {}
+      if (!isUnixLike()) {
+        try { fs.unlinkSync(launcherPath); } catch {}
+      }
       appendLog(`❌ Failed to launch installer: ${e.message}`, 'error');
       resolve({ ok: false, error: e.message });
     });
@@ -1584,7 +1639,7 @@ function installHermes() {
 }
 
 function ensureHermesExecutableRunnable(exePath) {
-  if (!exePath || !fs.existsSync(exePath)) return;
+  if (!isWindows() || !exePath || !fs.existsSync(exePath)) return;
   try {
     execFileSync('icacls', [exePath, '/setintegritylevel', 'Medium'], {
       timeout: 8000,
@@ -1596,13 +1651,7 @@ function ensureHermesExecutableRunnable(exePath) {
 }
 
 function hermesVenvPython() {
-  const candidates = [
-    path.join(HERMES_INSTALL, 'venv', 'Scripts', 'python.exe'),
-    path.join(HERMES_INSTALL, 'venv', 'bin', 'python.exe'),
-    path.join(HERMES_INSTALL, '.venv', 'Scripts', 'python.exe'),
-    path.join(HERMES_INSTALL, '.venv', 'bin', 'python.exe'),
-  ];
-  return candidates.find((p) => fs.existsSync(p)) || null;
+  return findVenvPython(HERMES_INSTALL);
 }
 
 function tryRepairHermesMissingAgentModule() {
@@ -1612,21 +1661,15 @@ function tryRepairHermesMissingAgentModule() {
     appendLog('🔧 Repairing Hermes Python dependencies…', 'warn');
     const installDir = HERMES_INSTALL;
     const agentDest = path.join(installDir, 'agent');
-    const candidates = [
-      path.join(process.env.LOCALAPPDATA || '', 'knight-trader', 'hermes', 'hermes-agent', 'agent'),
-      path.join(process.env.LOCALAPPDATA || '', 'knight-trader-blofin', 'hermes', 'hermes-agent', 'agent'),
-      path.join(process.env.LOCALAPPDATA || '', 'knight-trader-coinbase', 'hermes-coinbase', 'hermes-agent', 'agent'),
-    ].filter((p) => p && p !== agentDest && fs.existsSync(p));
+    const candidates = legacyHermesAgentDirs().filter((p) => p && p !== agentDest && fs.existsSync(p));
     if (candidates.length) {
       fs.rmSync(agentDest, { recursive: true, force: true });
       fs.cpSync(candidates[0], agentDest, { recursive: true, force: true });
       appendLog('✅ Restored Hermes agent package from local source.', 'success');
     } else {
-      const uvCli = path.join(installDir, 'bin', 'uv.exe');
-      const uvBin = path.join(installDir, '.venv', 'bin', 'uv.exe');
-      const uv = fs.existsSync(uvCli) ? uvCli : fs.existsSync(uvBin) ? uvBin : 'uv';
-      execFileSync(python, ['-m', 'pip', 'install', '--upgrade', 'pip'], { timeout: 120000, windowsHide: true });
-      execFileSync(uv, ['pip', 'install', '--python', python, '--no-deps', 'agent', 'agent-client-protocol'], { timeout: 180000, windowsHide: true });
+      const uv = findUv(installDir);
+      execFileSync(python, ['-m', 'pip', 'install', '--upgrade', 'pip'], { timeout: 120000, ...spawnOptions() });
+      execFileSync(uv, ['pip', 'install', '--python', python, '--no-deps', 'agent', 'agent-client-protocol'], { timeout: 180000, ...spawnOptions() });
       appendLog('✅ Hermes dependency repair finished.', 'success');
     }
     try {
@@ -2724,17 +2767,51 @@ async function autoconnectHermes() {
 if (process.platform === 'win32') {
   app.setAppUserModelId('com.knighttrader.propr');
 }
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
-if (!gotSingleInstanceLock) {
+const gotSingleInstanceLock = IS_HEADLESS ? true : app.requestSingleInstanceLock();
+if (!IS_HEADLESS && !gotSingleInstanceLock) {
   app.quit();
-} else {
+} else if (!IS_HEADLESS) {
   app.on('second-instance', () => {
     restoreMainWindow();
   });
 }
 
+function buildHeadlessDeps() {
+  return {
+    HERMES_HOME,
+    HERMES_INSTALL,
+    appendLog,
+    checkHermesInstalled,
+    installHermes,
+    syncHermesCredentials,
+    syncHermesConfig,
+    hermesChildEnv,
+    storeData,
+    saveStore,
+    getHermesEnvPath,
+    DEFAULT_NOUS_MODEL,
+    normalizeNousModel,
+  };
+}
+
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return;
+
+  bootstrapCredentialsFromEnv();
+
+  if (IS_HEADLESS) {
+    try {
+      await runHeadlessMode(buildHeadlessDeps(), CLI_ARGS);
+    } catch (e) {
+      appendLog(`Headless mode failed: ${e.message}`, 'error');
+      console.error(e.message);
+      process.exitCode = 1;
+    } finally {
+      app.quit();
+    }
+    return;
+  }
+
   attachBhProtocol(session.defaultSession);
   attachBhProtocol(session.fromPartition('persist:blohunter-trading'));
 
