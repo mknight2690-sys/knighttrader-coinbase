@@ -52,5 +52,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npm run build:linux
-          chmod +x scripts/run-linux.sh
-          gh release upload "${GITHUB_REF_NAME}" scripts/run-linux.sh#run-knighttrader-propr.sh --clobber
+          cp scripts/run-linux.sh run-knighttrader-propr.sh
+          chmod +x run-knighttrader-propr.sh
+          gh release upload "${GITHUB_REF_NAME}" run-knighttrader-propr.sh --clobber
