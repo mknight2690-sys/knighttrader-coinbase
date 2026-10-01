@@ -42,6 +42,7 @@ function createSseOffscreen({ sendToBackground, readGatewaySseConfig, log = () =
   let connected = false;
   let activeConfig = null;
   let running = false;
+  let disabledLogged = false;
 
   function clearReconnectTimer() {
     if (reconnectTimer) {
@@ -117,11 +118,15 @@ function createSseOffscreen({ sendToBackground, readGatewaySseConfig, log = () =
       scheduleReconnect('config-failed');
       return;
     }
-    if (!config?.endpoint) {
-      log('[SSE] no endpoint configured');
-      scheduleReconnect('no-endpoint');
+    if (config?.disabled || !config?.endpoint) {
+      connected = false;
+      if (!disabledLogged) {
+        disabledLogged = true;
+        log('[SSE] disabled — no gateway stream endpoint (Propr uses direct API polling)');
+      }
       return;
     }
+    disabledLogged = false;
 
     const endpoint = handshakeEndpoint(config.endpoint);
     activeConfig = { ...config, endpoint };
@@ -166,8 +171,15 @@ function createSseOffscreen({ sendToBackground, readGatewaySseConfig, log = () =
         }).catch(() => {});
       },
       onError: (err) => {
-        log('[SSE] stream error:', err?.message || err);
-        scheduleReconnect(err?.message || 'stream-error');
+        const msg = err?.message || String(err);
+        log('[SSE] stream error:', msg);
+        if (/SSE HTTP 40[13]/.test(msg) && /blohunter\.com/i.test(endpoint)) {
+          log('[SSE] remote BloHunter stream unauthorized — stopping reconnect loop');
+          running = false;
+          closeStream();
+          return;
+        }
+        scheduleReconnect(msg || 'stream-error');
       },
     });
   }

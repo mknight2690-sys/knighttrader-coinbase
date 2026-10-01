@@ -491,6 +491,8 @@ class BlohunterBridge {
     this.dashboardFetchTail = Promise.resolve();
     this.lastKnownOpenPositions = [];
     this.lastKnownOpenPositionKeys = new Set();
+    this.sseDisabled = false;
+    this.sseDisabledReason = '';
   }
 
   getConnectRoot() {
@@ -562,6 +564,7 @@ class BlohunterBridge {
   }
 
   async refreshGatewaySignal(reason = 'desktop-resync') {
+    if (this.sseDisabled) return;
     await this.clearGatewayReplayCursor(reason);
     if (this.sse) {
       await this.sse.restart(reason);
@@ -668,6 +671,7 @@ class BlohunterBridge {
   }
 
   async ensureGatewayHandshake(reason = 'handshake') {
+    if (this.sseDisabled) return true;
     this.storage.load();
     const state = this.storage.pick('local', [
       'gateway_v3_snapshot_status',
@@ -1144,23 +1148,36 @@ class BlohunterBridge {
       this.broadcastStorageChanged(changes, area);
     });
 
-    const gatewayModulePath = path.join(this.connectRoot, 'src', 'shared', 'gatewaySse.js');
-    const gatewayModule = await import(pathToFileURL(gatewayModulePath).href);
-    const baseReadGatewaySseConfig = gatewayModule.readGatewaySseConfig;
     const dashboardPort = this.hermesDashboardPort;
+    const disableProprSse = (reason) => {
+      this.sseDisabled = true;
+      this.sseDisabledReason = reason;
+      this.log(`[BloHunter] SSE disabled (${reason}) — Propr live data uses direct API polling`);
+      return {
+        version: 'v3',
+        endpoint: '',
+        disabled: true,
+        v3ReplayCursor: {
+          eventId: '',
+          source: '',
+          suppressed: false,
+          suppressedReason: '',
+          cursorUsed: false,
+        },
+      };
+    };
+
     const readGatewaySseConfig = async () => {
-      this.log('[BloHunter] readGatewaySseConfig called');
       try {
         const dashboardReady = await isLocalHermesDashboardReady(dashboardPort);
-        this.log(`[BloHunter] Local Hermes dashboard ready=${dashboardReady} (port ${dashboardPort})`);
         if (!dashboardReady) {
-          this.log(`[BloHunter] Local Hermes dashboard not reachable on 127.0.0.1:${dashboardPort}, using default stream config`);
-          return baseReadGatewaySseConfig();
+          return disableProprSse(`hermes-dashboard-unreachable:${dashboardPort}`);
         }
 
         const localReachable = await isLocalStreamReachable(dashboardPort);
-        this.log(`[BloHunter] Local Hermes stream reachable=${localReachable}`);
         if (localReachable) {
+          this.sseDisabled = false;
+          this.sseDisabledReason = '';
           const endpoint = resolveLocalStreamEndpoint(dashboardPort);
           this.log(`[BloHunter] Using local Hermes stream: ${endpoint}`);
           return {
@@ -1176,11 +1193,11 @@ class BlohunterBridge {
           };
         }
 
-        this.log('[BloHunter] Local Hermes dashboard reachable, but local stream endpoint not reachable/authorized; using default stream config');
+        return disableProprSse('no-local-blohunter-stream');
       } catch (err) {
         this.log(`[BloHunter] Local stream probe failed: ${err.message}`);
+        return disableProprSse('stream-probe-failed');
       }
-      return baseReadGatewaySseConfig();
     };
 
     this.sse = createSseOffscreen({
@@ -1198,6 +1215,13 @@ class BlohunterBridge {
     // handshake and leave the desk stuck on "awaiting snapshot".
     await this.clearGatewayReplayCursor('bridge-startup');
     await this.sse.start('bridge-startup');
+    if (this.sseDisabled) {
+      await this.storage.setArea('local', {
+        sse_signal_phase: 'connected',
+        sse_awaiting_snapshot: false,
+        sse_snapshot_wait_reason: '',
+      });
+    }
     this.backgroundReady = true;
     this.log('[BloHunter] Background runtime ready');
     return true;
