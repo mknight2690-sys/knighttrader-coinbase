@@ -18,6 +18,7 @@ const {
   isWindows,
   isUnixLike,
   spawnOptions,
+  hermesExecutableCandidates,
   findHermesExecutable: findHermesExecutableOnPlatform,
   findVenvPython,
   findUv,
@@ -1496,12 +1497,12 @@ function writeHermesInstallLauncher() {
     'if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',
     '',
     "Write-Host 'Checking Hermes Python environment...'",
-    `$venvPython = Join-Path $InstallDir 'venv' 'Scripts' 'python.exe'`,
-    'if (-not (Test-Path $venvPython)) { $venvPython = Join-Path $InstallDir ".venv" "Scripts" "python.exe" }',
+    "$venvPython = Join-Path (Join-Path (Join-Path $InstallDir 'venv') 'Scripts') 'python.exe'",
+    "if (-not (Test-Path $venvPython)) { $venvPython = Join-Path (Join-Path (Join-Path $InstallDir '.venv') 'Scripts') 'python.exe' }",
     'if (Test-Path $venvPython) {',
     '  try {',
-    '    $uv = Join-Path $InstallDir "bin" "uv.exe"',
-    '    if (-not (Test-Path $uv)) { $uv = Join-Path $InstallDir ".venv" "bin" "uv.exe" }',
+    "    $uv = Join-Path (Join-Path $InstallDir 'bin') 'uv.exe'",
+    "    if (-not (Test-Path $uv)) { $uv = Join-Path (Join-Path (Join-Path $InstallDir '.venv') 'bin') 'uv.exe' }",
     '    if (-not (Test-Path $uv)) { $uv = "uv" }',
     `    & $uv pip install --python $venvPython agent agent-client-protocol | Out-Null`,
     '    Write-Host "✅ Verified Hermes dependencies."',
@@ -1518,17 +1519,16 @@ function writeHermesInstallLauncher() {
 }
 
 function checkHermesInstalled() {
-  const exe = findHermesExecutable();
-  if (exe) {
+  for (const exe of hermesExecutableCandidates(HERMES_HOME, HERMES_INSTALL)) {
+    if (!fs.existsSync(exe)) continue;
     try {
-      const v = execFileSync(exe, ['--version'], { timeout: 5000 }).toString().trim();
+      const v = execFileSync(exe, ['--version'], { timeout: 5000, ...spawnOptions() }).toString().trim();
       return { installed: true, version: v, path: exe };
     } catch {
-      // exe exists but won't run — treat as broken partial install
-      return { installed: false, partial: true, path: HERMES_INSTALL };
+      // try next candidate (stale venv shim vs published bin/hermes.exe)
     }
   }
-  if (fs.existsSync(HERMES_INSTALL)) {
+  if (fs.existsSync(HERMES_INSTALL) || fs.existsSync(path.join(HERMES_HOME, 'bin'))) {
     return { installed: false, partial: true, path: HERMES_INSTALL };
   }
   return { installed: false, partial: false };
