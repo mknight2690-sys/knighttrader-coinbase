@@ -1,6 +1,6 @@
 {
   "name": "knight-trader-propr",
-  "version": "2.0.12",
+  "version": "2.0.13",
   "description": "KnightTrader Propr — Hermes credential manager & launcher",
   "main": "main.js",
   "scripts": {
@@ -31,7 +31,7 @@
       "target": [
         "AppImage"
       ],
-      "icon": "assets/icon.jpg",
+      "icon": "assets/icon.png",
       "category": "Finance",
       "maintainer": "KnightTrader <support@knighttrader.local>",
       "synopsis": "Hermes + Propr challenge auto-trading launcher",
