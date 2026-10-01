@@ -78,6 +78,7 @@ function decryptData(raw) {
 const PROPR_REST_URL = PROPR_API_URL;
 
 const DEFAULT_NOUS_MODEL = 'tencent/hy3:free';
+const CRON_PROMPT_VERSION = '2026-10-01-v3';
 
 const FALLBACK_FREE_NOUS_MODELS = [
   { id: 'tencent/hy3:free', label: 'tencent/hy3:free (free)' },
@@ -970,15 +971,14 @@ async function updateCronModelOnly(model) {
     appendLog('ℹ Cron job not found yet — model will be used when cron is configured.', 'info');
     return { ok: false, msg: 'no-existing-job' };
   }
-  const existingPrompt = existing.prompt || existing.spec?.prompt || null;
   const inf = resolveInferenceForModel(mdl);
   const updates = {
     name: 'propr-perp-trading',
     provider: 'custom',
     base_url: inf.baseUrl,
     model: mdl,
+    prompt: buildCronPrompt(),
   };
-  if (existingPrompt) updates.prompt = existingPrompt;
   const updated = await hermesApiRequest(
     'PUT',
     `/api/cron/jobs/${encodeURIComponent(existing.id)}?profile=default`,
@@ -986,7 +986,7 @@ async function updateCronModelOnly(model) {
     token,
   );
   if (updated.status < 300) {
-    appendLog(`✅ Cron model updated to ${mdl} (prompt preserved)`, 'success');
+    appendLog(`✅ Cron model updated to ${mdl} (prompt synced · ${CRON_PROMPT_VERSION})`, 'success');
     return { ok: true, jobId: existing.id, model: mdl };
   }
   const detail = typeof updated.body === 'object'
@@ -2097,10 +2097,10 @@ HARD RULES (never break these, even if a strategy says to):
 7. Stop trading once equity reaches $5,450. Close everything and report.
 8. No lookahead. Only use candles that have fully closed. Never claim results you did not actually get from the API.
 
-PROCESS (every 5 minutes, on each cron tick):
+PROCESS (every hour, at the top of the hour plus 1 minute):
 1. Pull real 1h, 4h and daily candles for all tradable Propr coins. Skip coins with thin volume.
 2. Score each coin with the strategies you have tested (momentum breakouts, trend pullbacks, RSI dips in an uptrend). Only count a strategy as an edge if it made money in your own fair backtest on the last 60+ days of real candles AND on a separate unseen period.
-3. Trade only the single best setup, and only if it is clearly an edge. Most ticks the right answer is "no trade."
+3. Trade only the single best setup, and only if it is clearly an edge. Most hours the right answer is "no trade."
 4. Paper-test new ideas "mentally" first: log what you would have done and check it against the next candles. A strategy can go live only after it wins on paper for at least 2 weeks.
 5. Log every decision (trade or no trade, and why) to trading_log.md. Save lessons learned to your persistent memory so you improve over time.
 6. Report each trade (coin, side, size, entry, stop, risk in $) and a short daily summary.
@@ -2233,7 +2233,7 @@ async function configureCron() {
           appendLog(`🔧 configureCron: update retry status=${updated.status}`, 'info');
         }
         if (updated.status < 300) {
-          appendLog('✅ Cron job updated: propr-perp-trading (every 5m)', 'success');
+          appendLog(`✅ Cron job updated: propr-perp-trading (every 5m · prompt ${CRON_PROMPT_VERSION})`, 'success');
           triggerAndConfirmCron(token, existing.id);
           return { ok: true, jobId: existing.id, updated: true };
         }
@@ -2258,7 +2258,7 @@ async function configureCron() {
       appendLog(`🔧 configureCron: create retry status=${created.status}`, 'info');
     }
     if (created.status < 300) {
-      appendLog('✅ Cron configured: propr-perp-trading (every 5m)', 'success');
+      appendLog(`✅ Cron configured: propr-perp-trading (every 5m · prompt ${CRON_PROMPT_VERSION})`, 'success');
       triggerAndConfirmCron(token, created.body?.id);
       return { ok: true, jobId: created.body?.id, endpoint: '/api/cron/jobs' };
     }
