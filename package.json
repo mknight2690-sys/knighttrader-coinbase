@@ -1,6 +1,6 @@
 {
   "name": "knight-trader-propr",
-  "version": "2.0.11",
+  "version": "2.0.12",
   "description": "KnightTrader Propr — Hermes credential manager & launcher",
   "main": "main.js",
   "scripts": {
@@ -8,7 +8,8 @@
     "dev": "electron . --dev",
     "package": "electron-builder",
     "build:win": "electron-builder --win --publish always",
-    "build:mac": "electron-builder --mac --publish always"
+    "build:mac": "electron-builder --mac --publish always",
+    "build:linux": "electron-builder --linux --publish always"
   },
   "build": {
     "appId": "com.knighttrader.propr",
@@ -25,6 +26,16 @@
       "target": "dmg",
       "icon": "assets/icon.jpg",
       "category": "public.app-category.finance"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "assets/icon.jpg",
+      "category": "Finance",
+      "maintainer": "KnightTrader <support@knighttrader.local>",
+      "synopsis": "Hermes + Propr challenge auto-trading launcher",
+      "description": "KnightTrader Propr desktop app — Hermes credentials, dashboard, gateway, and Propr cron."
     },
     "publish": {
       "provider": "github",
